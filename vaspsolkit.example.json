@@ -1,0 +1,27 @@
+{
+  "config_version": 1,
+  "profile": "vaspsol-neutral-relax",
+  "workflow": {
+    "job_root": "charge_sweep",
+    "results_root": "results",
+    "folders": ["1", "2", "3", "4", "5"],
+    "nelect_offsets": [-1.0, -0.5, 0.0, 0.5, 1.0],
+    "copy_files": ["INCAR", "POTCAR", "KPOINTS", "CHGCAR"],
+    "neutral_profile": "vaspsol-neutral-relax",
+    "charge_profile": "vaspsol-charge-relax",
+    "charge_points_include_neutral": true,
+    "vacuum_level_reference": "neutral",
+    "she_reference": 4.7,
+    "interface_count": 1,
+    "target_potentials": [0.0, 0.4]
+  },
+  "scheduler": {
+    "kind": "pbs",
+    "queue": "",
+    "cores": 48,
+    "memory": "",
+    "walltime": "48:00:00",
+    "nodes": [],
+    "script": "vasp.pbs"
+  }
+}

@@ -1,0 +1,41 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.11"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install . pytest
+      - run: python -m pytest -q
+
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install . pytest build
+      - name: Check public release contents
+        run: python -m pytest -q tests/test_public_release.py tests/test_release_build.py
+      - name: Build release artifacts
+        run: python tools/build_release.py --outdir /tmp/vaspsolkit-release
+      - name: Scan release artifacts
+        run: PUBLIC_RELEASE_ARTIFACTS=/tmp/vaspsolkit-release python -m pytest -q tests/test_public_release.py
+      - name: Verify isolated wheel install
+        run: |
+          python -m pip install --no-deps --target /tmp/vaspsolkit-install /tmp/vaspsolkit-release/*.whl
+          PYTHONPATH=/tmp/vaspsolkit-install python -m vaspsolkit --help

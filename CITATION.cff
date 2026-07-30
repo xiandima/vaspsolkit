@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+message: "If you use VASPsolKit in academic work, please cite this software release."
+type: software
+title: "VASPsolKit"
+version: "0.2.1"
+date-released: 2026-07-30
+authors:
+  - name: "VASPsolKit contributors"
+license: MIT

@@ -1,0 +1,5 @@
+"""VASPsol vacuum-reference constant-potential workflow tools."""
+
+__all__ = ["__version__"]
+
+__version__ = "0.2.1"

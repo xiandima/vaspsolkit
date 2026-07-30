@@ -1,0 +1,58 @@
+# Python build and test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+.venv/
+venv/
+.worktrees/
+
+# Local assistant/editor state
+.codex/
+.agents/
+.superpowers/
+.vscode/
+.idea/
+
+# Local VASP/VASPsol calculation inputs and generated workflow state
+POTCAR
+POSCAR
+INCAR
+KPOINTS
+vasp.pbs
+vasp.slurm
+submit.sh
+vaspsolkit.json
+vaspsolkit.state.json
+.vaspsolkit/
+charge_sweep/
+results/
+
+# VASP outputs and scheduler logs
+OUTCAR
+OSZICAR
+CONTCAR
+CHGCAR
+CHG
+WAVECAR
+LOCPOT
+DOSCAR
+EIGENVAL
+IBZKPT
+PROCAR
+vasprun.xml
+XDATCAR
+*.o[0-9]*
+*.e[0-9]*
+*.log
+vasp.out
+
+# Never publish local calculations, backups, or exploratory records
+analysis_outputs/
+backups/
+recalc/
+2026.5.8ver/

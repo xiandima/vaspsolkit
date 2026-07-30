@@ -1,0 +1,25 @@
+{
+  "name": "example reaction",
+  "systems": {
+    "slab": "../systems/slab/results/analysis.json",
+    "star_A": "../systems/star_A/results/analysis.json"
+  },
+  "constants": {
+    "G_A": -0.5
+  },
+  "curves": [
+    {
+      "name": "A adsorption",
+      "formula": "E(\"star_A\", U) - E(\"slab\", U) - G_A"
+    }
+  ],
+  "grid": {
+    "u_min": -1.5,
+    "u_max": 0.5,
+    "points": 301
+  },
+  "plot": {
+    "xlabel": "U / V vs. SHE",
+    "ylabel": "Free energy / eV"
+  }
+}

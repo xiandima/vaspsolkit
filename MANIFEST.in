@@ -1,0 +1,5 @@
+include README.md
+include LICENSE
+include pyproject.toml
+include tools/build_release.py
+prune archive
