@@ -15,7 +15,7 @@ class WorkbenchModelTests(unittest.TestCase):
         (root / "INCAR").write_text("IBRION = 2\nNSW = 100\n", encoding="utf-8")
         (root / "KPOINTS").write_text("Gamma\n", encoding="utf-8")
         (root / "POTCAR").write_text("potcar\n", encoding="utf-8")
-        (root / "vasp.pbs").write_text("#!/bin/bash\n", encoding="utf-8")
+        (root / "vasp.slurm").write_text("#!/bin/bash\n", encoding="utf-8")
 
     def test_model_exposes_navigation_and_real_read_only_case_data(self):
         from vaspsolkit.operations.models import build_workbench_model
@@ -38,7 +38,6 @@ class WorkbenchModelTests(unittest.TestCase):
         self.assertEqual(model.case_queue_rows, ())
         self.assertEqual(model.node_rows, ())
         self.assertEqual(model.global_queue_rows, ())
-        self.assertEqual(model.queue_tabs, ("case", "nodes", "global"))
         self.assertEqual(len(model.result_rows), 2)
         self.assertEqual(len(model.activities), 3)
         self.assertNotIn("example.invalid", repr(model))

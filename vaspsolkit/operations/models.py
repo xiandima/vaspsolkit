@@ -36,8 +36,8 @@ class JobView:
 @dataclass(frozen=True)
 class SchedulerView:
     kind: str
-    queue: str
-    cores: int
+    partition: str
+    tasks: int
     nodes: Tuple[str, ...]
     script: str
     walltime: str
@@ -228,7 +228,7 @@ def build_workbench_model(
     scheduler_text = (
         "调度器未配置"
         if scheduler.kind == "unknown"
-        else f"{scheduler.kind.upper()} · {scheduler.queue or '集群默认'} · {scheduler.cores} 核"
+        else f"{scheduler.kind.upper()} · {scheduler.partition or '集群默认'} · {scheduler.tasks} 核"
     )
     return WorkbenchModel(
         workdir=snapshot.workdir,

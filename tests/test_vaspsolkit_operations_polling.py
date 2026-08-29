@@ -50,7 +50,7 @@ def _write_initialized_case(root: Path, state: WorkflowState) -> None:
     (root / "KPOINTS").write_text("Gamma\n0\nGamma\n1 1 1\n0 0 0\n", encoding="utf-8")
     (root / "POTCAR").write_text("potcar\n", encoding="utf-8")
     (root / "vaspsolkit.json").write_text(
-        json.dumps({"scheduler": {"kind": "pbs", "queue": "normal", "cores": 24}}),
+        json.dumps({"scheduler": {"kind": "slurm", "partition": "normal", "tasks": 24}}),
         encoding="utf-8",
     )
 
@@ -173,11 +173,11 @@ def test_unknown_preserves_recorded_status_and_terminal_records(tmp_path: Path) 
 
 
 def test_default_scheduler_runner_has_a_bounded_subprocess_timeout() -> None:
-    from vaspsolkit.scheduler import PBSScheduler
+    from vaspsolkit.scheduler import SlurmScheduler
 
-    completed = subprocess.CompletedProcess(["qstat", "1.server"], 0, "", "")
+    completed = subprocess.CompletedProcess(["squeue", "1.server"], 0, "", "")
     with patch("subprocess.run", return_value=completed) as run:
-        PBSScheduler().status("1.server")
+        SlurmScheduler().status("1.server")
     assert run.call_args.kwargs["timeout"] == 30
 
 
@@ -192,9 +192,9 @@ def test_query_failure_leaves_state_file_and_passed_state_unchanged(tmp_path: Pa
     path = _write_state(root, state)
     before = path.read_bytes()
 
-    with pytest.raises(RuntimeError, match="qstat unavailable"):
+    with pytest.raises(RuntimeError, match="squeue unavailable"):
         refresh_recorded_jobs(
-            root, KitConfig(), state, scheduler=FakeScheduler(error=RuntimeError("qstat unavailable"))
+            root, KitConfig(), state, scheduler=FakeScheduler(error=RuntimeError("squeue unavailable"))
         )
 
     assert state.neutral is not None and state.neutral.status == "SUBMITTED"

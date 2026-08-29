@@ -33,9 +33,9 @@ def _positive_int(prompt: str, input_fn: InputFn) -> int:
     try:
         value = int(raw)
     except ValueError as exc:
-        raise ValueError("核心数必须是正整数") from exc
+        raise ValueError("任务数必须是正整数") from exc
     if value <= 0:
-        raise ValueError("核心数必须是正整数")
+        raise ValueError("任务数必须是正整数")
     return value
 
 

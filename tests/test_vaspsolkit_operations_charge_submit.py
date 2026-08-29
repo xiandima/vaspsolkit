@@ -10,15 +10,15 @@ def _prepared_case(root: Path) -> None:
     root.mkdir()
     for name in ("POSCAR", "INCAR", "KPOINTS", "POTCAR", "CHGCAR"):
         (root / name).write_text("neutral\n", encoding="utf-8")
-    (root / "vasp.pbs").write_text(
-        "#!/bin/bash\n#PBS -l nodes=1:ppn=48\nmpirun vasp_std\n",
+    (root / "vasp.slurm").write_text(
+        "#!/bin/bash\n#SLURM -l nodes=1:ppn=48\nmpirun vasp_std\n",
         encoding="utf-8",
     )
     write_kit_config(root / "vaspsolkit.json", KitConfig())
     for point in ("2", "3"):
         folder = root / "charge_sweep" / point
         folder.mkdir(parents=True)
-        for name in ("POSCAR", "INCAR", "KPOINTS", "POTCAR", "CHGCAR", "vasp.pbs"):
+        for name in ("POSCAR", "INCAR", "KPOINTS", "POTCAR", "CHGCAR", "vasp.slurm"):
             (folder / name).write_text(f"{point}-{name}\n", encoding="utf-8")
     WorkflowState(
         stage="charge_ready",
@@ -37,10 +37,10 @@ def _resources():
     return ResourceRequest.create(
         allocation="specified",
         nodes=("node24",),
-        cores=48,
-        queue="normal",
+        tasks=48,
+        partition="normal",
         walltime="48:00:00",
-        script="vasp.pbs",
+        script="vasp.slurm",
     )
 
 
@@ -52,7 +52,7 @@ def test_submit_selected_plan_targets_only_prepared_user_selection(tmp_path: Pat
     controller = WorkbenchController(case)
     plan = controller.plan("submit-selected", _resources(), selected=("2",))
     assert plan.target_jobs == ("2",)
-    assert plan.commands_summary == ("qsub × 1",)
+    assert plan.commands_summary == ("sbatch × 1",)
     assert plan.blocked_reason == ""
     assert plan.scheduler_request.nodes == ("node24",)
 
@@ -72,7 +72,7 @@ def test_submit_selected_plan_blocks_non_prepared_jobs(tmp_path: Path) -> None:
 
 
 
-def test_confirmed_selected_submission_calls_qsub_once_and_updates_only_that_job(
+def test_confirmed_selected_submission_calls_sbatch_once_and_updates_only_that_job(
     tmp_path: Path,
 ) -> None:
     from vaspsolkit.state import WorkflowState
@@ -105,7 +105,7 @@ def test_confirmed_selected_submission_calls_qsub_once_and_updates_only_that_job
     assert state.jobs["3"].status == "QUEUED"
 
 
-def test_unknown_charge_qsub_marks_charge_recovery_without_corrupting_neutral(
+def test_unknown_charge_sbatch_marks_charge_recovery_without_corrupting_neutral(
     tmp_path: Path,
 ) -> None:
     from vaspsolkit.state import WorkflowState
@@ -113,7 +113,7 @@ def test_unknown_charge_qsub_marks_charge_recovery_without_corrupting_neutral(
 
     class FailingScheduler:
         def submit(self, folder, script, **kwargs):
-            raise RuntimeError("qsub connection dropped")
+            raise RuntimeError("sbatch connection dropped")
 
     case = tmp_path / "case"
     _prepared_case(case)
@@ -132,7 +132,7 @@ def test_unknown_charge_qsub_marks_charge_recovery_without_corrupting_neutral(
     assert state.jobs["2"].status == "PREPARED"
 
 
-def test_charge_qsub_job_id_survives_local_state_save_failure(tmp_path: Path) -> None:
+def test_charge_sbatch_job_id_survives_local_state_save_failure(tmp_path: Path) -> None:
     from unittest.mock import patch
 
     from vaspsolkit.operations.controller import WorkbenchController
@@ -184,7 +184,7 @@ def test_reset_queued_plan_rechecks_pbs_then_marks_job_prepared(tmp_path: Path) 
     )
     plan = controller.plan_reset_queued(("3",), _resources())
     assert plan.target_jobs == ("3",)
-    assert plan.commands_summary == ("qstat × 1", "qdel ≤ 1")
+    assert plan.commands_summary == ("squeue × 1", "scancel ≤ 1")
     assert plan.blocked_reason == ""
     result = controller.execute(plan, confirmed=True)
     state = WorkflowState.load(case / "vaspsolkit.state.json")
@@ -194,7 +194,7 @@ def test_reset_queued_plan_rechecks_pbs_then_marks_job_prepared(tmp_path: Path) 
     assert state.jobs["3"].job_id == ""
 
 
-def test_reset_queued_plan_blocks_running_job_before_qdel(tmp_path: Path) -> None:
+def test_reset_queued_plan_blocks_running_job_before_scancel(tmp_path: Path) -> None:
     from vaspsolkit.scheduler import JobState
     from vaspsolkit.operations.controller import WorkbenchController
 
@@ -203,7 +203,7 @@ def test_reset_queued_plan_blocks_running_job_before_qdel(tmp_path: Path) -> Non
             return JobState(job_id, True, "R")
 
         def cancel(self, job_id):
-            raise AssertionError("qdel must not be called for RUNNING jobs")
+            raise AssertionError("scancel must not be called for RUNNING jobs")
 
     case = tmp_path / "case"
     _prepared_case(case)

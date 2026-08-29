@@ -13,7 +13,7 @@ class WorkbenchSnapshotTests(unittest.TestCase):
             "PtO\n1\n1 0 0\n0 1 0\n0 0 1\nPt O\n64 1\nDirect\n",
             encoding="utf-8",
         )
-        for name in ("INCAR", "KPOINTS", "POTCAR", "vasp.pbs"):
+        for name in ("INCAR", "KPOINTS", "POTCAR", "vasp.slurm"):
             (root / name).write_text("input\n", encoding="utf-8")
 
     def _write_config(self, root: Path) -> None:
@@ -51,10 +51,10 @@ class WorkbenchSnapshotTests(unittest.TestCase):
             root = Path(tmp)
             self._write_base_inputs(root)
             default = KitConfig()
-            default.scheduler.queue = "default-q"
+            default.scheduler.partition = "default-q"
             write_kit_config(root / "vaspsolkit.json", default)
             custom = KitConfig()
-            custom.scheduler.queue = "custom-q"
+            custom.scheduler.partition = "custom-q"
             custom_path = root / "cluster.json"
             write_kit_config(custom_path, custom)
 
@@ -62,7 +62,7 @@ class WorkbenchSnapshotTests(unittest.TestCase):
                 root, config_path=custom_path
             ).snapshot()
 
-        self.assertEqual(snapshot.scheduler.queue, "custom-q")
+        self.assertEqual(snapshot.scheduler.partition, "custom-q")
 
     def test_real_state_populates_neutral_charge_and_queue_records(self):
         from vaspsolkit.orchestrator import STATE_FILENAME
@@ -170,12 +170,11 @@ class WorkbenchSnapshotTests(unittest.TestCase):
             self._write_base_inputs(root)
             outside = parent / "outside"
             outside.mkdir()
-            outside_script = outside / "outside.pbs"
+            outside_script = outside / "outside.slurm"
             outside_script.write_text("secret\n", encoding="utf-8")
             (outside / "summary.csv").write_text("secret\n", encoding="utf-8")
             config = KitConfig()
             config.scheduler.script = str(outside_script.resolve())
-            config.workflow.pbs_file = "../outside/outside.pbs"
             config.workflow.results_root = "../outside"
             config.workflow.summary_file = "summary.csv"
             config.workflow.analysis_file = str((outside / "analysis.json").resolve())
@@ -194,7 +193,7 @@ class WorkbenchSnapshotTests(unittest.TestCase):
             with patch.object(Path, "is_file", case_only_is_file):
                 snapshot = build_workbench_snapshot(root)
 
-        script_rows = [row for row in snapshot.input_rows if row.name == "../outside/outside.pbs"]
+        script_rows = [row for row in snapshot.input_rows if row.name == str(outside_script.resolve())]
         self.assertEqual(len(script_rows), 1)
         self.assertFalse(script_rows[0].exists)
         self.assertEqual(script_rows[0].status, "ERROR")

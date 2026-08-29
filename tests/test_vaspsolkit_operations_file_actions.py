@@ -21,19 +21,19 @@ def _write_case(root: Path, *, incar: str = "ENCUT = 520\nIBRION = 2\nNSW = 80\n
         "TITEL = PAW_PBE O 01Jan2000\nENMAX = 400 eV\n",
         encoding="utf-8",
     )
-    (root / "vasp.pbs").write_text("#!/bin/sh\n", encoding="utf-8")
+    (root / "vasp.slurm").write_text("#!/bin/sh\n", encoding="utf-8")
 
 
-def _resources(*, persist: bool = False, allocation: str = "auto", nodes=(), queue="normal"):
+def _resources(*, persist: bool = False, allocation: str = "auto", nodes=(), partition="normal"):
     from vaspsolkit.operations.actions import ResourceRequest
 
     return ResourceRequest.create(
         allocation=allocation,
         nodes=tuple(nodes),
-        cores=48,
-        queue=queue,
+        tasks=48,
+        partition=partition,
         walltime="48:00:00",
-        script="vasp.pbs",
+        script="vasp.slurm",
         persist=persist,
     )
 
@@ -140,8 +140,8 @@ def test_persisted_resource_defaults_use_reviewed_atomic_config_write(
 
     config = load_kit_config(tmp_path / "vaspsolkit.json")
     assert config.scheduler.nodes == ["node24"]
-    assert config.scheduler.cores == 48
-    assert config.workflow.qsub_ppn == 48
+    assert config.scheduler.tasks == 48
+    assert config.scheduler.tasks_per_node == 96
 
 
 def test_resource_defaults_preserve_concurrent_valid_config_update(
@@ -160,8 +160,8 @@ def test_resource_defaults_preserve_concurrent_valid_config_update(
         ResourceRequest.create(
             allocation="auto",
             nodes=(),
-            cores=96,
-            queue="compute",
+            tasks=96,
+            partition="compute",
             walltime="72:00:00",
             script="vasp.slurm",
             persist=True,

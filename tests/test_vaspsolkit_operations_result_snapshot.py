@@ -16,8 +16,8 @@ def _write_case(root: Path) -> None:
     (root / "POTCAR").write_text(
         "TITEL = PAW_PBE Pt 01Jan2000\nENMAX = 300 eV\n", encoding="utf-8"
     )
-    (root / "vasp.pbs").write_text(
-        "#!/bin/bash\n#PBS -l nodes=1:ppn=48\nmpirun -np 48 vasp_std\n",
+    (root / "vasp.slurm").write_text(
+        "#!/bin/bash\n#SLURM -l nodes=1:ppn=48\nmpirun -np 48 vasp_std\n",
         encoding="utf-8",
     )
 

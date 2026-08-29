@@ -23,13 +23,13 @@ from .parsers import (
     surface_charge,
 )
 from .reference_settings import summary_reference_fields
-from .pbs import PbsSpec, write_pbs_script
-from .scheduler import PBSScheduler
+from .scheduler import SlurmScheduler
 
 
 NELECT_TOLERANCE = 1.0e-3
 MAGNETIZATION_JUMP_THRESHOLD = 0.5
 RESIDUAL_WARNING_THRESHOLD = 0.03
+SUBMISSION_SCRIPT = "vasp.slurm"
 
 
 @dataclass
@@ -68,10 +68,10 @@ def prepare_jobs(
 
     _require_existing(base / "INCAR")
     _require_existing(base / "CONTCAR")
-    _require_existing(base / config.pbs_file)
+    _require_existing(base / SUBMISSION_SCRIPT)
 
-    root_pbs = (base / config.pbs_file).read_text(encoding="utf-8", errors="ignore")
-    base_job_name = _pbs_job_name(root_pbs) or base.name
+    root_script = (base / SUBMISSION_SCRIPT).read_text(encoding="utf-8", errors="ignore")
+    base_job_name = _slurm_job_name(root_script) or base.name
     prepared: List[PreparedJob] = []
     jobs_root = job_root_path(base, config)
     if not dry_run:
@@ -89,8 +89,6 @@ def prepare_jobs(
 
         target.mkdir(parents=True, exist_ok=True)
         for filename in config.copy_files:
-            if filename == config.pbs_file:
-                continue
             source = base / filename
             if not source.exists():
                 continue
@@ -101,14 +99,9 @@ def prepare_jobs(
                 shutil.copy2(source, destination)
 
         shutil.copy2(base / "CONTCAR", target / "POSCAR")
+        shutil.copy2(base / SUBMISSION_SCRIPT, target / SUBMISSION_SCRIPT)
         _write_charge_incar(target / "INCAR", nelect)
-        _write_standard_pbs(
-            target,
-            config.pbs_file,
-            job_name,
-            _default_node(config),
-            config,
-        )
+        _write_child_slurm(target / SUBMISSION_SCRIPT, job_name)
 
     return prepared
 
@@ -116,27 +109,17 @@ def prepare_jobs(
 def submit_jobs(
     base: Path,
     config: WorkflowConfig,
-    scheduler: PBSScheduler,
+    scheduler: SlurmScheduler,
     dry_run: bool = False,
 ) -> Dict[str, str]:
     job_ids: Dict[str, str] = {}
-    nodes = _submission_nodes(config, scheduler, len(config.folders), dry_run)
-    for index, folder_name in enumerate(config.folders):
+    for folder_name in config.folders:
         folder = job_folder_path(Path(base), config, folder_name)
-        _validate_submit_folder(folder, config.pbs_file)
-        node = nodes[index] if nodes else _default_node(config)
-        job_name = _submit_job_name(folder, config.pbs_file)
-        if not dry_run:
-            _write_standard_pbs(folder, config.pbs_file, job_name, node, config)
+        _validate_submit_folder(folder, SUBMISSION_SCRIPT)
         job_ids[folder_name] = scheduler.submit(
             folder,
-            config.pbs_file,
+            SUBMISSION_SCRIPT,
             dry_run=dry_run,
-            job_name=job_name,
-            queue=config.qsub_queue,
-            node=node,
-            ppn=config.qsub_ppn,
-            walltime=config.qsub_walltime,
         )
     state_path = result_file_path(Path(base), config, config.job_state_file)
     state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -147,7 +130,7 @@ def submit_jobs(
 def monitor_jobs(
     base: Path,
     config: WorkflowConfig,
-    scheduler: PBSScheduler,
+    scheduler: SlurmScheduler,
     job_ids: Optional[Dict[str, str]] = None,
 ) -> None:
     if job_ids is None:
@@ -346,26 +329,17 @@ def _collect_charge_row(
 def run_workflow(
     base: Path,
     config: WorkflowConfig,
-    scheduler: Optional[PBSScheduler] = None,
+    scheduler: Optional[SlurmScheduler] = None,
     dry_run: bool = False,
     resume: bool = False,
 ) -> Dict[str, object]:
-    scheduler = scheduler or PBSScheduler()
+    scheduler = scheduler or SlurmScheduler()
     base = Path(base)
     if not dry_run and not is_converged(base):
-        nodes = _submission_nodes(config, scheduler, 1, dry_run=False)
-        node = nodes[0] if nodes else _default_node(config)
-        job_name = _submit_job_name(base, config.pbs_file)
-        _write_standard_pbs(base, config.pbs_file, job_name, node, config)
         root_job = scheduler.submit(
             base,
-            config.pbs_file,
+            SUBMISSION_SCRIPT,
             dry_run=False,
-            job_name=job_name,
-            queue=config.qsub_queue,
-            node=node,
-            ppn=config.qsub_ppn,
-            walltime=config.qsub_walltime,
         )
         monitor_job(base, config, scheduler, root_job)
     prepared = prepare_jobs(base, config, dry_run=dry_run, resume=resume)
@@ -381,7 +355,7 @@ def run_workflow(
     return {"prepared": [job.folder.name for job in prepared], "job_ids": job_ids, "rows": rows}
 
 
-def monitor_job(folder: Path, config: WorkflowConfig, scheduler: PBSScheduler, job_id: str) -> None:
+def monitor_job(folder: Path, config: WorkflowConfig, scheduler: SlurmScheduler, job_id: str) -> None:
     folder = Path(folder)
     while True:
         if _job_finished_and_converged(folder, scheduler, job_id):
@@ -529,27 +503,26 @@ def _write_charge_incar(path: Path, nelect: float, profile: str = "vaspsol-charg
     path.write_text(incar, encoding="utf-8")
 
 
-def _write_child_pbs(path: Path, job_name: str) -> None:
+def _write_child_slurm(path: Path, job_name: str) -> None:
     text = path.read_text(encoding="utf-8", errors="ignore")
-    if _pbs_job_name(text):
+    if _slurm_job_name(text):
         lines = []
         for line in text.splitlines():
-            if line.strip().startswith("#PBS -N"):
-                lines.append(f"#PBS -N {job_name}")
+            if re.match(r"^\s*#SBATCH\s+(?:-J|--job-name(?:=|\s))", line):
+                lines.append(f"#SBATCH -J {job_name}")
             else:
                 lines.append(line)
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     else:
-        path.write_text(f"#PBS -N {job_name}\n" + text, encoding="utf-8")
+        path.write_text(f"#SBATCH -J {job_name}\n" + text, encoding="utf-8")
 
 
-def _pbs_job_name(text: str) -> Optional[str]:
+def _slurm_job_name(text: str) -> Optional[str]:
     for line in text.splitlines():
         stripped = line.strip()
-        if stripped.startswith("#PBS -N"):
-            parts = stripped.split()
-            if len(parts) >= 3:
-                return parts[2]
+        match = re.match(r"^#SBATCH\s+(?:-J\s+|--job-name(?:=|\s+))(\S+)", stripped)
+        if match:
+            return match.group(1)
     return None
 
 
@@ -559,57 +532,9 @@ def _child_job_name(base_job_name: str, folder_name: str) -> str:
     return f"{base_job_name}-{folder_name}"
 
 
-def _validate_submit_folder(folder: Path, pbs_file: str) -> None:
-    for filename in ("INCAR", "POSCAR", "POTCAR", "KPOINTS", pbs_file):
+def _validate_submit_folder(folder: Path, script: str) -> None:
+    for filename in ("INCAR", "POSCAR", "POTCAR", "KPOINTS", script):
         _require_existing(folder / filename)
-
-
-def _submission_nodes(
-    config: WorkflowConfig,
-    scheduler: PBSScheduler,
-    count: int,
-    dry_run: bool,
-) -> List[str]:
-    if dry_run or count <= 0:
-        return []
-    nodes = scheduler.available_nodes(count, min_node=config.qsub_min_node, ppn=config.qsub_ppn)
-    if not nodes:
-        raise RuntimeError(
-            f"no PBS node with at least {config.qsub_ppn} free cores and node number >= "
-            f"{config.qsub_min_node}"
-        )
-    return nodes
-
-
-def _submit_job_name(folder: Path, pbs_file: str) -> str:
-    path = Path(folder) / pbs_file
-    if not path.exists():
-        return Path(folder).name
-    return _pbs_job_name(path.read_text(encoding="utf-8", errors="ignore")) or Path(folder).name
-
-
-def _write_standard_pbs(
-    folder: Path,
-    pbs_file: str,
-    job_name: str,
-    node: Optional[str],
-    config: WorkflowConfig,
-) -> None:
-    write_pbs_script(
-        Path(folder) / pbs_file,
-        PbsSpec(
-            job_name=job_name,
-            workdir=Path(folder),
-            node=node,
-            queue=config.qsub_queue,
-            ppn=config.qsub_ppn,
-            walltime=config.qsub_walltime,
-        ),
-    )
-
-
-def _default_node(config: WorkflowConfig) -> Optional[str]:
-    return None
 
 
 def _require_existing(path: Path) -> None:
@@ -617,7 +542,7 @@ def _require_existing(path: Path) -> None:
         raise FileNotFoundError(f"required file is missing: {path}")
 
 
-def _job_finished_and_converged(folder: Path, scheduler: PBSScheduler, job_id: str) -> bool:
+def _job_finished_and_converged(folder: Path, scheduler: SlurmScheduler, job_id: str) -> bool:
     state = scheduler.status(job_id)
     if state.exists:
         return False

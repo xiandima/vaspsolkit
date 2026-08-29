@@ -10,27 +10,13 @@ def _has_forbidden_release_content(content: bytes) -> bool:
     return any(value.lower() in content.lower() for value in forbidden)
 
 
-def test_default_pbs_template_has_no_site_specific_node_or_module() -> None:
-    from vaspsolkit.pbs import PbsSpec, render_pbs_script
-
-    text = render_pbs_script(PbsSpec(job_name="example", workdir=Path("/tmp/example")))
-
-    assert "#PBS -l nodes=1:ppn=48" in text
-    assert "#PBS -q" not in text
-    assert "node17.example.invalid" not in text
+def test_default_slurm_template_is_portable() -> None:
+    text = Path("templates/slurm.vasp.sh").read_text(encoding="utf-8")
+    assert "#SBATCH --partition=compute" in text
+    assert "#SBATCH --ntasks=96" in text
+    assert "--nodelist" not in text
     assert "/opt/" + "modules" not in text
-    assert "module load" not in text
-
-
-def test_configured_pbs_module_has_no_site_specific_init_script() -> None:
-    from vaspsolkit.pbs import PbsSpec, render_pbs_script
-
-    text = render_pbs_script(
-        PbsSpec(job_name="example", workdir=Path("/tmp/example"), module="vasp/6")
-    )
-
-    assert "module load vasp/6" in text
-    assert "/opt/" + "modules" not in text
+    assert "vasp_std" in text and "vasp_gam" not in text
 
 
 def test_default_configuration_uses_slurm_local_server_profile() -> None:
@@ -45,31 +31,36 @@ def test_default_configuration_uses_slurm_local_server_profile() -> None:
     assert config.scheduler.modules == []
 
 
-def test_readme_documents_numbered_menu_and_confirmation_contract() -> None:
+def test_readme_documents_slurm_workflow_and_confirmation_contract() -> None:
     readme = Path("README.md").read_text(encoding="utf-8")
 
     assert "vaspsolkit menu" in readme
     assert "02" in readme and "推荐下一步" in readme
     assert "SUBMIT" in readme
     assert "CANCEL" in readme
-    assert "vaspsolkit ui" in readme and "已归档" in readme
     assert "只查询当前 Case" in readme
-    assert "提交资源配置" in readme
-    assert "使用以上配置" in readme
     assert "自动分配节点" in readme
     assert "指定节点" in readme
-    assert "是否保存为当前 Case 默认配置" in readme
-    assert "未输入 `SUBMIT`" in readme
-    assert "NO_COLOR=1 vaspsolkit" in readme
-    assert "Sarasa Mono SC" in readme
-    assert "80 列" in readme
-    assert "不会自动清屏" in readme
-    assert "非交互" in readme and "ANSI" in readme
-    assert "SHE reference [4.70 eV]" in readme
-    assert "13)" in readme
+    assert "分区 -> 分区内节点" in readme
+    assert "compute" in readme and "96" in readme and "72:00:00" in readme
+    assert "mpirun -np 96 vasp_std" in readme
+    assert "squeue" in readme and "sacct" in readme
     assert "configure-reference" in readme
-    assert "she_reference_source" in readme
-    assert "60 → 61 → 62" in readme
+    assert "默认不复制、不读取 `WAVECAR`" in readme
+
+
+def test_runtime_has_no_builtin_pbs_implementation() -> None:
+    allowed = {Path("vaspsolkit/config.py")}
+    forbidden = re.compile(r"PBSScheduler|PBSNodeInfo|qsub|qstat|qdel|pbsnodes|#PBS|vasp\.pbs")
+    violations = []
+    for path in Path("vaspsolkit").rglob("*.py"):
+        if path in allowed:
+            continue
+        if forbidden.search(path.read_text(encoding="utf-8")):
+            violations.append(str(path))
+    assert violations == []
+    assert not Path("vaspsolkit/pbs.py").exists()
+    assert not Path("templates/pbs.vasp.pbs").exists()
 
 
 def test_public_tree_has_no_private_paths_or_site_hostnames() -> None:

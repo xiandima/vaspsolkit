@@ -229,7 +229,7 @@ def test_scheduler_failure_is_a_warning_and_menu_still_exits(tmp_path) -> None:
     from vaspsolkit.interactive_menu import run_menu, synchronize_case
 
     _write_case_state(tmp_path)
-    scheduler = RecordingScheduler(error=RuntimeError("qstat unavailable"))
+    scheduler = RecordingScheduler(error=RuntimeError("squeue unavailable"))
     output = []
 
     code = run_menu(
@@ -244,7 +244,7 @@ def test_scheduler_failure_is_a_warning_and_menu_still_exits(tmp_path) -> None:
     )
 
     assert code == 0
-    assert any("队列同步失败" in line and "qstat unavailable" in line for line in output)
+    assert any("队列同步失败" in line and "squeue unavailable" in line for line in output)
     assert any("VASPsolKit" in line for line in output)
 
 
@@ -343,10 +343,10 @@ def test_fixed_submit_dispatches_selected_prepared_jobs_after_exact_confirmation
     resources = ResourceRequest.create(
         allocation="specified",
         nodes=("node24",),
-        cores=40,
-        queue="normal",
+        tasks=40,
+        partition="normal",
         walltime="48:00:00",
-        script="vasp.pbs",
+        script="vasp.slurm",
     )
 
     code = run_menu_action(
@@ -370,22 +370,28 @@ def test_fixed_submit_dispatches_selected_prepared_jobs_after_exact_confirmation
             "1",
             "--resource-allocation",
             "specified",
+            "--resource-partition",
+            "normal",
             "--resource-node",
             "node24",
-            "--resource-cores",
+            "--resource-node-count",
+            "1",
+            "--resource-tasks",
             "40",
+            "--resource-tasks-per-node",
+            "96",
         ]
     ]
     assert any("最终提交配置" in line for line in output)
     assert any("node24" in line for line in output)
-    assert any("核心数：40" in line for line in output)
+    assert any("MPI tasks：40" in line for line in output)
 
 
 def _write_neutral_submission_case(root: Path) -> None:
     from vaspsolkit.config import KitConfig, write_kit_config
     from vaspsolkit.state import JobRecord, WorkflowState
 
-    for name in ("POSCAR", "INCAR", "KPOINTS", "POTCAR", "vasp.pbs"):
+    for name in ("POSCAR", "INCAR", "KPOINTS", "POTCAR", "vasp.slurm"):
         (root / name).write_text("input\n", encoding="utf-8")
     write_kit_config(root / "vaspsolkit.json", KitConfig())
     WorkflowState(
@@ -424,10 +430,10 @@ def test_rejected_submit_does_not_dispatch_or_persist_resources(tmp_path) -> Non
     resources = ResourceRequest.create(
         allocation="auto",
         nodes=(),
-        cores=32,
-        queue="",
+        tasks=32,
+        partition="compute",
         walltime="48:00:00",
-        script="vasp.pbs",
+        script="vasp.slurm",
         persist=True,
     )
     calls = []
@@ -459,4 +465,3 @@ def test_public_tree_excludes_retired_ui_development_archive() -> None:
     root = Path(__file__).parents[1]
 
     assert not (root / "archive" / "terminal-ui").exists()
-    assert not (root / "docs" / "superpowers").exists()

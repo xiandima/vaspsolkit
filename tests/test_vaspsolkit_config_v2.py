@@ -82,7 +82,7 @@ def test_scheduler_validation_accepts_matching_explicit_nodes() -> None:
 def test_workflow_config_has_no_pbs_submission_fields() -> None:
     field_names = {item.name for item in fields(WorkflowConfig)}
     assert "pbs_file" not in field_names
-    assert not {name for name in field_names if name.startswith("qsub_")}
+    assert not {name for name in field_names if name.startswith("sbatch_")}
     assert KitConfig().to_dict()["scheduler"]["script"] == "vasp.slurm"
 
 
@@ -177,9 +177,9 @@ def test_migrate_v2_returns_validated_normalized_copy_without_mutation() -> None
             {
                 "config_version": 1,
                 "workflow": {},
-                "scheduler": {"kind": "slurm", "cores": "96"},
+                "scheduler": {"kind": "slurm", "tasks": "96"},
             },
-            "scheduler.cores",
+            "scheduler.tasks",
         ),
     ],
 )
@@ -366,7 +366,7 @@ def test_migrate_v1_pbs_profile_is_rejected() -> None:
 def test_migrate_flat_pbs_shaped_config_is_rejected() -> None:
     with pytest.raises(ValueError, match="select a SLURM profile"):
         config_module.migrate_config_data(
-            {"folders": ["1"], "nelect_offsets": [0], "qsub_ppn": 48}
+            {"folders": ["1"], "nelect_offsets": [0], "sbatch_ppn": 48}
         )
 
 

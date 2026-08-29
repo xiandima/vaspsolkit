@@ -31,8 +31,8 @@ class Diagnostic:
 @dataclass(frozen=True)
 class SchedulerSummary:
     kind: str = "unknown"
-    queue: str = "-"
-    cores: int = 0
+    partition: str = "-"
+    tasks: int = 0
     max_inflight: Optional[int] = None
     script: str = "-"
     nodes: Tuple[str, ...] = ()
@@ -188,8 +188,8 @@ def inspect_case(workdir: Path, config_path: Optional[Path] = None) -> CaseSnaps
     neutral = state.neutral if state is not None else None
     scheduler = SchedulerSummary(
         kind=config.scheduler.kind,
-        queue=config.scheduler.queue,
-        cores=config.scheduler.cores,
+        partition=config.scheduler.partition,
+        tasks=config.scheduler.tasks,
         max_inflight=config.scheduler.max_inflight,
         script=config.scheduler.script,
         nodes=tuple(config.scheduler.nodes),
@@ -327,7 +327,7 @@ def recommend(snapshot: CaseSnapshot) -> Recommendation:
 def present_error(exc: Exception, title: str = "Action failed") -> ErrorCard:
     raw = str(exc)
     lowered = raw.lower()
-    if "qsub" in lowered or "sbatch" in lowered or "scheduler" in lowered:
+    if "sbatch" in lowered or "sbatch" in lowered or "scheduler" in lowered:
         suggestion = "Review scheduler settings and the submission script, then retry."
     elif "outcar" in lowered or "e-fermi" in lowered:
         suggestion = "Confirm the calculation finished and rerun the relevant check."

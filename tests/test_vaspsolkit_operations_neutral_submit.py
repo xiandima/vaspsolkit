@@ -12,7 +12,7 @@ import pytest
 
 
 class FakeScheduler:
-    def __init__(self, *, submit_result: str = "128042.node01", submit_error: str = "") -> None:
+    def __init__(self, *, submit_result: str = "128042", submit_error: str = "") -> None:
         self.submit_result = submit_result
         self.submit_error = submit_error
         self.submit_calls = []
@@ -24,9 +24,11 @@ class FakeScheduler:
         script,
         dry_run=False,
         job_name=None,
-        queue=None,
-        node=None,
-        ppn=None,
+        partition=None,
+        nodes=(),
+        node_count=None,
+        tasks=None,
+        tasks_per_node=None,
         walltime=None,
     ):
         self.submit_calls.append(
@@ -35,9 +37,11 @@ class FakeScheduler:
                 "script": script,
                 "dry_run": dry_run,
                 "job_name": job_name,
-                "queue": queue,
-                "node": node,
-                "ppn": ppn,
+                "partition": partition,
+                "nodes": tuple(nodes),
+                "node_count": node_count,
+                "tasks": tasks,
+                "tasks_per_node": tasks_per_node,
                 "walltime": walltime,
             }
         )
@@ -63,19 +67,19 @@ def _write_case(root: Path) -> None:
         "TITEL = PAW_PBE O 01Jan2000\nENMAX = 400 eV\n",
         encoding="utf-8",
     )
-    (root / "vasp.pbs").write_text("#!/bin/sh\n", encoding="utf-8")
+    (root / "vasp.slurm").write_text("#!/bin/sh\n", encoding="utf-8")
 
 
-def _resources(*, persist=False, node="node24", cores=48, queue="normal"):
+def _resources(*, persist=False, node="node24", tasks=48, partition="normal"):
     from vaspsolkit.operations.actions import ResourceRequest
 
     return ResourceRequest.create(
         allocation="specified" if node else "auto",
         nodes=(node,) if node else (),
-        cores=cores,
-        queue=queue,
+        tasks=tasks,
+        partition=partition,
         walltime="48:00:00",
-        script="vasp.pbs",
+        script="vasp.slurm",
         persist=persist,
     )
 
@@ -103,8 +107,8 @@ def _receipt(root: Path, status: str, *, job_id: str = ""):
     neutral = state.neutral
     return SubmissionReceipt(
         case_path=str(root.resolve()), case_device=info.st_dev, case_inode=info.st_ino,
-        case_mode=stat.S_IFMT(info.st_mode), job_id=job_id, command="qsub",
-        resources={"queue": "", "nodes": [], "cores": 48}, timestamp="2026-07-25T00:00:00+08:00",
+        case_mode=stat.S_IFMT(info.st_mode), job_id=job_id, command="sbatch",
+        resources={"partition": "", "nodes": [], "tasks": 48}, timestamp="2026-07-25T00:00:00+08:00",
         state_before={
             "stage": state.stage, "jobs": {},
             "neutral": asdict(neutral) if neutral else None,
@@ -123,49 +127,51 @@ def test_submit_neutral_uses_previewed_resources_and_returns_immediately(tmp_pat
     result = controller.execute(plan, confirmed=True)
 
     assert result.ok is True
-    assert result.job_ids == {"neutral": "128042.node01"}
+    assert result.job_ids == {"neutral": "128042"}
     assert fake.submit_calls == [{
         "workdir": tmp_path,
-        "script": "vasp.pbs",
+        "script": "vasp.slurm",
         "dry_run": False,
         "job_name": None,
-        "queue": "normal",
-        "node": "node24",
-        "ppn": 48,
+        "partition": "normal",
+        "nodes": ("node24",),
+        "node_count": 1,
+        "tasks": 48,
+        "tasks_per_node": 96,
         "walltime": "48:00:00",
     }]
     assert fake.status_calls == []
     state = WorkflowState.load(tmp_path / "vaspsolkit.state.json")
     assert state.neutral is not None
     assert state.neutral.status == "SUBMITTED"
-    assert state.neutral.job_id == "128042.node01"
+    assert state.neutral.job_id == "128042"
 
 
-@pytest.mark.parametrize("queue", ["", "workq"])
-def test_submit_neutral_preserves_reviewed_queue_exactly(
-    tmp_path: Path, queue: str
+@pytest.mark.parametrize("partition", ["compute", "workq"])
+def test_submit_neutral_preserves_reviewed_partition_exactly(
+    tmp_path: Path, partition: str
 ) -> None:
     fake = FakeScheduler()
     controller = _prepared_controller(tmp_path, fake)
 
     result = controller.execute(
-        controller.plan("submit-neutral", _resources(node=None, queue=queue)),
+        controller.plan("submit-neutral", _resources(node=None, partition=partition)),
         confirmed=True,
     )
 
     assert result.ok
-    assert fake.submit_calls[0]["queue"] == queue
+    assert fake.submit_calls[0]["partition"] == partition
 
 
-def test_controller_rejects_multiple_nodes_before_preview_or_qsub(tmp_path: Path) -> None:
+def test_controller_rejects_multiple_nodes_before_preview_or_sbatch(tmp_path: Path) -> None:
     from vaspsolkit.operations.actions import ResourceRequest
 
     fake = FakeScheduler()
     controller = _prepared_controller(tmp_path, fake)
-    with pytest.raises(ValueError, match="one|single|一个|单个"):
+    with pytest.raises(ValueError, match="node_count"):
         resources = ResourceRequest.create(
-            allocation="specified", nodes=("node24", "node25"), cores=48,
-            queue="", walltime="48:00:00", script="vasp.pbs",
+            allocation="specified", nodes=("node24", "node25"), tasks=48,
+            partition="compute", walltime="48:00:00", script="vasp.slurm",
         )
         controller.plan("submit-neutral", resources)
     assert fake.submit_calls == []
@@ -173,7 +179,7 @@ def test_controller_rejects_multiple_nodes_before_preview_or_qsub(tmp_path: Path
 
 @pytest.mark.parametrize(
     ("receipt_status", "job_id"),
-    [("SUBMITTING", ""), ("ACCEPTED", "128777.node01")],
+    [("SUBMITTING", ""), ("ACCEPTED", "128777")],
 )
 @pytest.mark.parametrize("command", ["submit-neutral", "run"])
 def test_cli_submit_neutral_fails_closed_on_existing_submission_receipt(
@@ -226,14 +232,14 @@ def test_cli_and_controller_compete_for_one_durable_submission_claim(
     from vaspsolkit.operations import activity
     from vaspsolkit.operations.controller import WorkbenchController
 
-    fake = FakeScheduler(submit_result="128778.node01")
+    fake = FakeScheduler(submit_result="128778")
     prepared = _prepared_controller(tmp_path, fake)
     state_root = tmp_path.parent / f".{tmp_path.name}-shared-state"
     monkeypatch.setattr(activity, "DEFAULT_STATE_ROOT", state_root)
     controller = WorkbenchController(
         tmp_path, scheduler_factory=lambda _: fake, activity_state_root=state_root,
     )
-    plan = controller.plan("submit-neutral", _resources(node=None, queue=""))
+    plan = controller.plan("submit-neutral", _resources(node=None, partition="compute"))
     monkeypatch.setattr("vaspsolkit.cli.scheduler_from_config", lambda _: fake)
     start = threading.Barrier(2)
 
@@ -262,14 +268,14 @@ def test_run_submit_neutral_and_controller_share_one_submission_claim(
     from vaspsolkit.operations import activity
     from vaspsolkit.operations.controller import WorkbenchController
 
-    fake = FakeScheduler(submit_result="128779.node01")
+    fake = FakeScheduler(submit_result="128779")
     _prepared_controller(tmp_path, fake)
     state_root = tmp_path.parent / f".{tmp_path.name}-shared-state"
     monkeypatch.setattr(activity, "DEFAULT_STATE_ROOT", state_root)
     controller = WorkbenchController(
         tmp_path, scheduler_factory=lambda _: fake, activity_state_root=state_root,
     )
-    plan = controller.plan("submit-neutral", _resources(node=None, queue=""))
+    plan = controller.plan("submit-neutral", _resources(node=None, partition="compute"))
     monkeypatch.setattr("vaspsolkit.cli.scheduler_from_config", lambda _: fake)
     start = threading.Barrier(3)
 
@@ -337,7 +343,7 @@ def test_run_with_recorded_job_returns_without_scheduler_refresh(
     state = WorkflowState.load(tmp_path / "vaspsolkit.state.json")
     assert state.neutral is not None
     state.neutral.status = "SUBMITTED"
-    state.neutral.job_id = "128780.node01"
+    state.neutral.job_id = "128780"
     state.save(tmp_path / "vaspsolkit.state.json")
     monkeypatch.setattr("vaspsolkit.cli.scheduler_from_config", lambda _: fake)
     output = []
@@ -352,9 +358,9 @@ def test_run_with_recorded_job_returns_without_scheduler_refresh(
 
 @pytest.mark.parametrize(
     ("submit_result", "submit_error"),
-    [("", ""), ("not-a-job-id", ""), ("128000.node01", "qsub transport failed")],
+    [("", ""), ("not-a-job-id", ""), ("128000", "sbatch transport failed")],
 )
-def test_cli_qsub_error_or_unparseable_output_keeps_barrier_and_blocks_retry(
+def test_cli_sbatch_error_or_unparseable_output_keeps_barrier_and_blocks_retry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     submit_result: str, submit_error: str,
 ) -> None:
@@ -378,7 +384,7 @@ def test_cli_qsub_error_or_unparseable_output_keeps_barrier_and_blocks_retry(
     assert len(fake.submit_calls) == 1
 
 
-def test_cli_interruption_after_qsub_invocation_keeps_submitting_barrier(
+def test_cli_interruption_after_sbatch_invocation_keeps_submitting_barrier(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from vaspsolkit.cli import main
@@ -407,8 +413,8 @@ def test_cli_interruption_after_qsub_invocation_keeps_submitting_barrier(
 @pytest.mark.parametrize(
     ("submit_result", "submit_error", "raw"),
     [
-        ("128042.node01", "qsub failed: Unauthorized Request", "Unauthorized Request"),
-        ("not-a-pbs-job", "", "not-a-pbs-job"),
+        ("128042", "sbatch failed: Unauthorized Request", "Unauthorized Request"),
+        ("not-a-slurm-job", "", "not-a-slurm-job"),
         ("", "", ""),
     ],
 )
@@ -427,7 +433,7 @@ def test_submit_failure_keeps_prepared_and_returns_structured_error(
     assert result.status == "recovery-required"
     assert result.error is not None
     assert result.error.step == "reconcile-neutral-submit"
-    assert result.error.command == "qsub"
+    assert result.error.command == "sbatch"
     assert raw in result.error.raw
     assert result.error.suggestion_zh
     assert result.error.suggestion_en
@@ -462,7 +468,7 @@ def test_submit_plan_protects_active_neutral_states(tmp_path: Path, status: str)
     state = WorkflowState.load(tmp_path / "vaspsolkit.state.json")
     assert state.neutral is not None
     state.neutral.status = status
-    state.neutral.job_id = "128000.node01"
+    state.neutral.job_id = "128000"
     state.save(tmp_path / "vaspsolkit.state.json")
 
     plan = controller.plan("submit-neutral", _resources())
@@ -473,7 +479,7 @@ def test_submit_plan_protects_active_neutral_states(tmp_path: Path, status: str)
 
 
 def test_submit_preview_is_single_use_even_after_failure(tmp_path: Path) -> None:
-    fake = FakeScheduler(submit_error="qsub failed")
+    fake = FakeScheduler(submit_error="sbatch failed")
     controller = _prepared_controller(tmp_path, fake)
     plan = controller.plan("submit-neutral", _resources())
     result = controller.execute(plan, confirmed=True)
@@ -490,7 +496,7 @@ def test_submit_resource_scope_is_explicit(tmp_path: Path, persist: bool) -> Non
     controller = _prepared_controller(tmp_path, fake)
     config_path = tmp_path / "vaspsolkit.json"
     before = config_path.read_bytes()
-    request = _resources(persist=persist, node="node31", cores=32, queue="workq")
+    request = _resources(persist=persist, node="node31", tasks=32, partition="workq")
     plan = controller.plan("submit-neutral", request)
 
     assert bool(plan.file_diffs) is persist
@@ -500,17 +506,17 @@ def test_submit_resource_scope_is_explicit(tmp_path: Path, persist: bool) -> Non
     if persist:
         data = json.loads(after)
         assert data["scheduler"]["nodes"] == ["node31"]
-        assert data["scheduler"]["cores"] == 32
-        assert data["scheduler"]["queue"] == "workq"
+        assert data["scheduler"]["tasks"] == 32
+        assert data["scheduler"]["partition"] == "workq"
     else:
         assert after == before
-    assert fake.submit_calls[0]["node"] == "node31"
-    assert fake.submit_calls[0]["ppn"] == 32
-    assert fake.submit_calls[0]["queue"] == "workq"
+    assert fake.submit_calls[0]["nodes"] == ("node31",)
+    assert fake.submit_calls[0]["tasks"] == 32
+    assert fake.submit_calls[0]["partition"] == "workq"
 
 
-def test_attempted_qsub_failure_blocks_fresh_retry(tmp_path: Path) -> None:
-    fake = FakeScheduler(submit_error="qsub failed: transient")
+def test_attempted_sbatch_failure_blocks_fresh_retry(tmp_path: Path) -> None:
+    fake = FakeScheduler(submit_error="sbatch failed: transient")
     controller = _prepared_controller(tmp_path, fake)
     first = controller.execute(
         controller.plan("submit-neutral", _resources()), confirmed=True
@@ -521,14 +527,14 @@ def test_attempted_qsub_failure_blocks_fresh_retry(tmp_path: Path) -> None:
     assert len(fake.submit_calls) == 1
 
 
-def test_persisted_resources_remain_reviewed_defaults_when_qsub_fails(tmp_path: Path) -> None:
+def test_persisted_resources_remain_reviewed_defaults_when_sbatch_fails(tmp_path: Path) -> None:
     from vaspsolkit.state import WorkflowState
 
-    fake = FakeScheduler(submit_error="qsub failed: queue disabled")
+    fake = FakeScheduler(submit_error="sbatch failed: queue disabled")
     controller = _prepared_controller(tmp_path, fake)
     plan = controller.plan(
         "submit-neutral",
-        _resources(persist=True, node="node31", cores=32, queue="workq"),
+        _resources(persist=True, node="node31", tasks=32, partition="workq"),
     )
 
     result = controller.execute(plan, confirmed=True)
@@ -536,19 +542,19 @@ def test_persisted_resources_remain_reviewed_defaults_when_qsub_fails(tmp_path: 
     assert not result.ok
     config = json.loads((tmp_path / "vaspsolkit.json").read_text(encoding="utf-8"))
     assert config["scheduler"]["nodes"] == ["node31"]
-    assert config["scheduler"]["cores"] == 32
-    assert config["scheduler"]["queue"] == "workq"
+    assert config["scheduler"]["tasks"] == 32
+    assert config["scheduler"]["partition"] == "workq"
     state = WorkflowState.load(tmp_path / "vaspsolkit.state.json")
     assert state.neutral is not None and state.neutral.status == "PREPARED"
 
 
-def test_post_submit_state_failure_creates_durable_barrier_and_repairs_without_qsub(
+def test_post_submit_state_failure_creates_durable_barrier_and_repairs_without_sbatch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from vaspsolkit.state import WorkflowState
     from vaspsolkit.operations.controller import WorkbenchController
 
-    fake = FakeScheduler(submit_result="128099.node01")
+    fake = FakeScheduler(submit_result="128099")
     receipt_root = tmp_path.parent / f".{tmp_path.name}-user-state"
     controller = _prepared_controller(tmp_path, fake)
     controller.activity_state_root = receipt_root
@@ -568,15 +574,15 @@ def test_post_submit_state_failure_creates_durable_barrier_and_repairs_without_q
 
     monkeypatch.setattr(WorkflowState, "save", fail_once_after_submit)
     result = controller.execute(
-        controller.plan("submit-neutral", _resources(node="node33", cores=24)),
+        controller.plan("submit-neutral", _resources(node="node33", tasks=24)),
         confirmed=True,
     )
 
     assert not result.ok
     assert result.error is not None
     assert result.error.step == "recover-neutral-state"
-    assert "128099.node01" in result.error.raw
-    assert "qsub" not in result.error.suggestion.lower()
+    assert "128099" in result.error.raw
+    assert "sbatch" not in result.error.suggestion.lower()
     assert len(fake.submit_calls) == 1
     assert controller.snapshot().neutral.status == "SUBMIT_UNKNOWN"
 
@@ -591,7 +597,7 @@ def test_post_submit_state_failure_creates_durable_barrier_and_repairs_without_q
     )
     blocked = fresh.plan("submit-neutral", _resources())
     assert blocked.blocked_reason
-    assert "128099.node01" in blocked.blocked_reason
+    assert "128099" in blocked.blocked_reason
 
     repair = fresh.plan("repair-neutral-submit")
     assert repair.effect == "file-changing"
@@ -601,7 +607,7 @@ def test_post_submit_state_failure_creates_durable_barrier_and_repairs_without_q
     state = WorkflowState.load(tmp_path / "vaspsolkit.state.json")
     assert state.neutral is not None
     assert state.neutral.status == "SUBMITTED"
-    assert state.neutral.job_id == "128099.node01"
+    assert state.neutral.job_id == "128099"
 
     # Receipt was cleared, so another fresh controller sees normal submitted protection.
     newest = WorkbenchController(
@@ -612,7 +618,7 @@ def test_post_submit_state_failure_creates_durable_barrier_and_repairs_without_q
     assert newest.plan("submit-neutral", _resources()).blocked_reason
 
 
-def test_write_ahead_intent_failure_never_calls_qsub(
+def test_write_ahead_intent_failure_never_calls_sbatch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import vaspsolkit.operations.controller as controller_module
@@ -637,11 +643,11 @@ def test_write_ahead_intent_failure_never_calls_qsub(
 
 
 
-def test_qsub_exception_after_attempt_keeps_intent_and_blocks_fresh_review(tmp_path: Path) -> None:
+def test_sbatch_exception_after_attempt_keeps_intent_and_blocks_fresh_review(tmp_path: Path) -> None:
     from vaspsolkit.operations.activity import read_submission_receipt
     from vaspsolkit.operations.controller import WorkbenchController
 
-    fake = FakeScheduler(submit_error="qsub failed before acceptance")
+    fake = FakeScheduler(submit_error="sbatch failed before acceptance")
     receipt_root = tmp_path.parent / f".{tmp_path.name}-user-state"
     controller = _prepared_controller(tmp_path, fake)
     controller.activity_state_root = receipt_root
@@ -657,13 +663,13 @@ def test_qsub_exception_after_attempt_keeps_intent_and_blocks_fresh_review(tmp_p
     assert fresh.plan("submit-neutral", _resources()).blocked_reason
 
 
-def test_qsub_failure_with_intent_cleanup_failure_remains_blocked(
+def test_sbatch_failure_with_intent_cleanup_failure_remains_blocked(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import vaspsolkit.operations.controller as controller_module
     from vaspsolkit.operations.activity import read_submission_receipt
 
-    fake = FakeScheduler(submit_error="qsub rejected")
+    fake = FakeScheduler(submit_error="sbatch rejected")
     receipt_root = tmp_path.parent / f".{tmp_path.name}-user-state"
     controller = _prepared_controller(tmp_path, fake)
     controller.activity_state_root = receipt_root
@@ -691,7 +697,7 @@ def test_qsub_failure_with_intent_cleanup_failure_remains_blocked(
 def test_two_controllers_with_prebuilt_plans_submit_exactly_once(tmp_path: Path) -> None:
     from vaspsolkit.operations.controller import WorkbenchController
 
-    fake = FakeScheduler(submit_result="128120.node01")
+    fake = FakeScheduler(submit_result="128120")
     receipt_root = tmp_path.parent / f".{tmp_path.name}-user-state"
     first = _prepared_controller(tmp_path, fake)
     first.activity_state_root = receipt_root
@@ -735,15 +741,15 @@ def test_stale_manual_no_job_cannot_overwrite_or_clear_accepted_receipt(tmp_path
     owner = new_submission_owner_token()
     submitting = SubmissionReceipt(
         case_path=str(case.resolve()), case_device=identity.st_dev,
-        case_inode=identity.st_ino, job_id="", command="qsub",
-        resources={"script": "vasp.pbs"}, timestamp="2026-07-24T00:00:00+08:00",
+        case_inode=identity.st_ino, job_id="", command="sbatch",
+        resources={"script": "vasp.slurm"}, timestamp="2026-07-24T00:00:00+08:00",
         owner_token=owner, status="SUBMITTING", version=0,
     )
     claim_submission_receipt(case, submitting, root)
     stale_manual = read_submission_receipt(case, root)
     assert stale_manual == submitting
 
-    accepted = replace(submitting, status="ACCEPTED", job_id="128140.node01", version=1)
+    accepted = replace(submitting, status="ACCEPTED", job_id="128140", version=1)
     update_submission_receipt(
         case, accepted, owner, root,
         expected_version=0, expected_status="SUBMITTING",
@@ -767,11 +773,11 @@ def test_stale_manual_no_job_cannot_overwrite_or_clear_accepted_receipt(tmp_path
     assert lock_path.is_file()
 
 
-def test_manual_reconcile_records_job_id_without_qsub(tmp_path: Path) -> None:
+def test_manual_reconcile_records_job_id_without_sbatch(tmp_path: Path) -> None:
     from vaspsolkit.state import WorkflowState
     from vaspsolkit.operations.activity import read_activities, read_submission_receipt
 
-    fake = FakeScheduler(submit_result="malformed qsub output")
+    fake = FakeScheduler(submit_result="malformed sbatch output")
     controller = _prepared_controller(tmp_path, fake)
     result = controller.execute(
         controller.plan("submit-neutral", _resources()), confirmed=True
@@ -780,27 +786,27 @@ def test_manual_reconcile_records_job_id_without_qsub(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="Job ID"):
         controller.plan_reconcile_job_id("not a job")
 
-    plan = controller.plan_reconcile_job_id("128121.node01")
+    plan = controller.plan_reconcile_job_id("128121")
     reconciled = controller.execute(plan, confirmed=True)
 
     assert reconciled.ok
     assert len(fake.submit_calls) == 1
     state = WorkflowState.load(tmp_path / "vaspsolkit.state.json")
-    assert state.neutral is not None and state.neutral.job_id == "128121.node01"
+    assert state.neutral is not None and state.neutral.job_id == "128121"
     assert read_submission_receipt(tmp_path, controller.activity_state_root) is None
     assert read_activities(tmp_path, controller.activity_state_root)[0].action == "record-job-id"
 
 
-def test_confirm_no_pbs_job_requires_exact_second_confirmation(tmp_path: Path) -> None:
+def test_confirm_no_slurm_job_requires_exact_second_confirmation(tmp_path: Path) -> None:
     from vaspsolkit.operations.activity import read_activities, read_submission_receipt
 
-    fake = FakeScheduler(submit_result="malformed qsub output")
+    fake = FakeScheduler(submit_result="malformed sbatch output")
     controller = _prepared_controller(tmp_path, fake)
     controller.execute(controller.plan("submit-neutral", _resources()), confirmed=True)
-    with pytest.raises(ValueError, match="PBS未创建任务"):
+    with pytest.raises(ValueError, match="SLURM未创建任务"):
         controller.plan_confirm_no_job("yes")
 
-    plan = controller.plan_confirm_no_job("PBS未创建任务")
+    plan = controller.plan_confirm_no_job("SLURM未创建任务")
     assert plan.warnings
     cleared = controller.execute(plan, confirmed=True)
 
@@ -841,7 +847,7 @@ def test_atomic_state_save_failure_preserves_old_file(
     path = tmp_path / "vaspsolkit.state.json"
     WorkflowState(neutral=JobRecord(folder=".", status="PREPARED")).save(path)
     before = path.read_bytes()
-    updated = WorkflowState(neutral=JobRecord(folder=".", status="SUBMITTED", job_id="128150.node01"))
+    updated = WorkflowState(neutral=JobRecord(folder=".", status="SUBMITTED", job_id="128150"))
     if failure_point == "replace":
         monkeypatch.setattr(state_module, "_replace_state", lambda *args: (_ for _ in ()).throw(OSError("replace failed")))
     else:
@@ -866,7 +872,7 @@ def test_state_durability_fault_after_acceptance_keeps_accepted_barrier(
     import vaspsolkit.state as state_module
     from vaspsolkit.operations.activity import read_submission_receipt
 
-    fake = FakeScheduler(submit_result="128152.node01")
+    fake = FakeScheduler(submit_result="128152")
     controller = _prepared_controller(tmp_path, fake)
     if fault == "replace-error":
         monkeypatch.setattr(state_module, "_replace_state", lambda *args: (_ for _ in ()).throw(OSError("replace failed")))
@@ -890,10 +896,10 @@ def test_state_durability_fault_after_acceptance_keeps_accepted_barrier(
     assert len(fake.submit_calls) == 1
     receipt = read_submission_receipt(tmp_path, controller.activity_state_root)
     assert receipt is not None and receipt.status == "ACCEPTED"
-    assert receipt.job_id == "128152.node01"
+    assert receipt.job_id == "128152"
 
 
-def test_submission_lock_symlink_prevents_qsub(tmp_path: Path) -> None:
+def test_submission_lock_symlink_prevents_sbatch(tmp_path: Path) -> None:
     from vaspsolkit.operations.activity import submission_receipt_path
 
     fake = FakeScheduler()
@@ -919,7 +925,7 @@ def test_reconcile_rejects_state_symlink(tmp_path: Path) -> None:
     state_path.unlink()
     state_path.symlink_to(outside)
     with pytest.raises(RuntimeError, match="non-symlink|普通|state target"):
-        controller.plan_reconcile_job_id("128151.node01")
+        controller.plan_reconcile_job_id("128151")
 
 
 @pytest.mark.parametrize("flow", ["job-id", "no-job"])
@@ -943,9 +949,9 @@ def test_manual_reconcile_rejects_receipt_for_wrong_case_identity(
 
     with pytest.raises(RuntimeError, match="Case"):
         if flow == "job-id":
-            controller.plan_reconcile_job_id("128160.node01")
+            controller.plan_reconcile_job_id("128160")
         else:
-            controller.plan_confirm_no_job("PBS未创建任务")
+            controller.plan_confirm_no_job("SLURM未创建任务")
 
     assert receipt_path.exists()
     assert (tmp_path / "vaspsolkit.state.json").read_bytes() == state_before
@@ -963,9 +969,9 @@ def test_manual_reconcile_plan_rejects_case_directory_replacement_before_execute
     controller = _prepared_controller(case, fake)
     controller.execute(controller.plan("submit-neutral", _resources()), confirmed=True)
     plan = (
-        controller.plan_reconcile_job_id("128161.node01")
+        controller.plan_reconcile_job_id("128161")
         if flow == "job-id"
-        else controller.plan_confirm_no_job("PBS未创建任务")
+        else controller.plan_confirm_no_job("SLURM未创建任务")
     )
     receipt_path = submission_receipt_path(case, controller.activity_state_root)
     old_case = tmp_path / "old-case"
@@ -1000,12 +1006,12 @@ def test_manual_reconcile_accepts_legacy_receipt_with_unknown_case_mode(
     receipt_path.write_text(json.dumps(data), encoding="utf-8")
 
     if flow == "job-id":
-        plan = controller.plan_reconcile_job_id("128170.node01")
+        plan = controller.plan_reconcile_job_id("128170")
         result = controller.execute(plan, confirmed=True)
         state = WorkflowState.load(tmp_path / "vaspsolkit.state.json")
-        assert state.neutral is not None and state.neutral.job_id == "128170.node01"
+        assert state.neutral is not None and state.neutral.job_id == "128170"
     else:
-        plan = controller.plan_confirm_no_job("PBS未创建任务")
+        plan = controller.plan_confirm_no_job("SLURM未创建任务")
         result = controller.execute(plan, confirmed=True)
         state = WorkflowState.load(tmp_path / "vaspsolkit.state.json")
         assert state.neutral is not None and state.neutral.status == "PREPARED"
@@ -1013,9 +1019,6 @@ def test_manual_reconcile_accepts_legacy_receipt_with_unknown_case_mode(
     assert result.ok
     assert not receipt_path.exists()
     assert len(fake.submit_calls) == 1
-
-
-
 
 
 

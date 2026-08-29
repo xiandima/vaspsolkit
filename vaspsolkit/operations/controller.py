@@ -43,7 +43,7 @@ from ..orchestrator import (
     submit_selected_jobs,
     submit_neutral_job,
 )
-from ..scheduler import PBSScheduler, scheduler_from_config
+from ..scheduler import SlurmScheduler, scheduler_from_config
 from ..postprocess import postprocess_versioned
 from ..reference_settings import inspect_reference_freshness
 from ..state import JobRecord, WorkflowState
@@ -77,7 +77,7 @@ _ACTION_METADATA = {
     "init": ("初始化 vaspsolkit 配置", "为当前 Case 创建 workflow 配置。"),
     "save-resources": ("保存 Case 默认资源", "将已预览的资源设置写入当前 Case 配置。"),
     "prepare-neutral": ("准备中性结构优化", "生成中性结构优化所需输入。"),
-    "repair-neutral-submit": ("修复中性任务记录", "qsub 已返回 Job ID，仅修复本地状态，不会再次提交。"),
+    "repair-neutral-submit": ("修复中性任务记录", "sbatch 已返回 Job ID，仅修复本地状态，不会再次提交。"),
     "monitor": ("刷新任务状态", "只检查已记录任务的当前状态。"),
     "prepare-charge": ("准备带电点计算", "从中性结果生成带电点目录。"),
     "check-prepared": ("检查带电点输入", "检查带电点输入是否可以提交。"),
@@ -241,7 +241,7 @@ class WorkbenchController:
                     diagnostics=job.diagnostics
                     + (
                         receipt_error
-                        or "charge qsub may have been accepted; manual reconciliation is required",
+                        or "charge sbatch may have been accepted; manual reconciliation is required",
                     ),
                 )
                 if job.name == target_charge
@@ -260,9 +260,9 @@ class WorkbenchController:
                 name="submit-selected",
                 title=f"人工核对带电任务 {target_charge}",
                 reason=(
-                    f"qsub 已返回 Job ID {job_id}；禁止再次提交。"
+                    f"sbatch 已返回 Job ID {job_id}；禁止再次提交。"
                     if accepted
-                    else "存在 SUBMITTING 恢复屏障；必须先查询 PBS。"
+                    else "存在 SUBMITTING 恢复屏障；必须先查询 SLURM。"
                 ),
                 effect=ACTION_EFFECTS["submit-selected"],
                 cli_command=None,
@@ -282,17 +282,17 @@ class WorkbenchController:
             recorded_status="RECOVERY_REQUIRED",
             job_id=job_id,
             diagnostics=snapshot.neutral.diagnostics + (
-                receipt_error or "qsub succeeded; local state recovery is required",
+                receipt_error or "sbatch succeeded; local state recovery is required",
             ),
         )
         recommendation = replace(
             snapshot.recommendation,
             name="repair-neutral-submit" if accepted else "submit-neutral",
-            title="修复中性任务记录" if accepted else "人工核对 PBS 提交状态",
+            title="修复中性任务记录" if accepted else "人工核对 SLURM 提交状态",
             reason=(
-                "已有 qsub Job ID；只修复本地状态，绝不再次提交。"
+                "已有 sbatch Job ID；只修复本地状态，绝不再次提交。"
                 if accepted
-                else "存在 SUBMITTING 恢复屏障；必须人工查询 PBS，禁止再次提交。"
+                else "存在 SUBMITTING 恢复屏障；必须人工查询 SLURM，禁止再次提交。"
             ),
             effect=(
                 ACTION_EFFECTS["repair-neutral-submit"]
@@ -370,12 +370,7 @@ class WorkbenchController:
         inspect_nodes = getattr(scheduler, "inspect_nodes", None)
         if inspect_nodes is None:
             raise RuntimeError("当前调度器不支持节点探测；请手动输入节点名。")
-        return tuple(
-            inspect_nodes(
-                min_node=config.workflow.qsub_min_node,
-                ppn=config.scheduler.cores,
-            )
-        )
+        return tuple(inspect_nodes(config.scheduler.partition))
 
     def plan_resource_defaults(self, resources: ResourceRequest) -> ActionPlan:
         self.preview_resources(resources)
@@ -411,7 +406,7 @@ class WorkbenchController:
         return plan
 
     def plan_reconcile_job_id(self, job_id: str) -> ActionPlan:
-        if not isinstance(job_id, str) or _ValidatedPBSScheduler._JOB_ID.fullmatch(job_id.strip()) is None:
+        if not isinstance(job_id, str) or _ValidatedSlurmScheduler._JOB_ID.fullmatch(job_id.strip()) is None:
             raise ValueError("Job ID 格式无效")
         receipt, error = self._submission_barrier()
         if receipt is None or error:
@@ -435,22 +430,22 @@ class WorkbenchController:
         return plan
 
     def plan_confirm_no_job(self, confirmation: str) -> ActionPlan:
-        if confirmation != "PBS未创建任务":
-            raise ValueError("必须准确输入：PBS未创建任务")
+        if confirmation != "SLURM未创建任务":
+            raise ValueError("必须准确输入：SLURM未创建任务")
         receipt, error = self._submission_barrier()
         if receipt is None or error:
             raise RuntimeError(error or "没有提交恢复屏障")
         self._verify_receipt_case_identity(receipt)
         if receipt.status == "ACCEPTED":
-            raise RuntimeError("已记录 Job ID，不能声明 PBS 未创建任务")
+            raise RuntimeError("已记录 Job ID，不能声明 SLURM 未创建任务")
         plan = ActionPlan(
             action_id="clear-submit-barrier",
             effect=ACTION_EFFECTS["clear-submit-barrier"],
             target_case=self.workdir,
             target_jobs=("neutral",),
-            title="确认 PBS 未创建任务并解除屏障",
-            reason="仅在人工查询 PBS 后确认没有任务时使用。",
-            warnings=("此操作不会调用 qsub；错误确认可能导致以后重复提交。",),
+            title="确认 SLURM 未创建任务并解除屏障",
+            reason="仅在人工查询 SLURM 后确认没有任务时使用。",
+            warnings=("此操作不会调用 sbatch；错误确认可能导致以后重复提交。",),
         )
         self._activate(
             plan,
@@ -488,7 +483,7 @@ class WorkbenchController:
                 target_jobs=recorded,
                 title=_ACTION_METADATA[action][0],
                 reason=_ACTION_METADATA[action][1],
-                commands_summary=((f"qstat × {len(recorded)}",) if recorded else ()),
+                commands_summary=((f"squeue × {len(recorded)}",) if recorded else ()),
                 warnings=("只查询当前 Case 已记录的 Job ID，不扫描全局队列。",),
                 blocked_reason="" if recorded else "当前 Case 没有可同步的 Job ID。",
             )
@@ -508,9 +503,10 @@ class WorkbenchController:
                 raise ValueError("init requires resources")
             resources.validate()
             scheduler = SchedulerConfig(
-                kind="pbs", queue=resources.queue, cores=resources.cores,
+                kind="slurm", partition=resources.partition,
+                nodes=list(resources.nodes), node_count=resources.node_count,
+                tasks=resources.tasks, tasks_per_node=resources.tasks_per_node,
                 walltime=resources.walltime, script=resources.script,
-                nodes=list(resources.nodes),
             )
             initialization = plan_case_initialization(self.workdir, scheduler)
             payload = initialization
@@ -559,9 +555,9 @@ class WorkbenchController:
             blocked_reason = ""
             if receipt is not None:
                 blocked_reason = (
-                    f"Job {receipt.job_id} 已由 qsub 接受，必须先修复本地状态；禁止再次提交。"
+                    f"Job {receipt.job_id} 已由 sbatch 接受，必须先修复本地状态；禁止再次提交。"
                     if receipt.status == "ACCEPTED"
-                    else f"存在 {receipt.status} 提交恢复屏障；必须人工核对 PBS，禁止再次提交。"
+                    else f"存在 {receipt.status} 提交恢复屏障；必须人工核对 SLURM，禁止再次提交。"
                 )
             elif receipt_error:
                 blocked_reason = f"提交恢复屏障不可读：{receipt_error}；禁止再次提交。"
@@ -595,9 +591,9 @@ class WorkbenchController:
             plan = ActionPlan(
                 action_id=action, effect=ACTION_EFFECTS[action],
                 target_case=self.workdir, target_jobs=("neutral",), title="提交中性任务",
-                reason="中性结构优化输入已经准备好，可预览一次 qsub 提交。",
+                reason="中性结构优化输入已经准备好，可预览一次 sbatch 提交。",
                 file_diffs=file_diffs,
-                scheduler_request=resources, commands_summary=("qsub × 1",),
+                scheduler_request=resources, commands_summary=("sbatch × 1",),
                 blocked_reason=blocked_reason,
             )
         elif action == "submit-selected":
@@ -691,7 +687,7 @@ class WorkbenchController:
                 reason=_ACTION_METADATA[action][1],
                 file_diffs=file_diffs,
                 scheduler_request=resources,
-                commands_summary=(f"qsub × {len(names)}",),
+                commands_summary=(f"sbatch × {len(names)}",),
                 blocked_reason=" ".join(blocked_parts),
             )
         elif action in {"prepare-charge", "check-prepared"}:
@@ -793,9 +789,9 @@ class WorkbenchController:
         selected: Tuple[str, ...],
         resources: ResourceRequest,
     ) -> ActionPlan:
-        """Preview the safe first half of a node change: qstat, then qdel.
+        """Preview the safe first half of a node change: squeue, then scancel.
 
-        This action deliberately does not call qsub.  A successful reset leaves
+        This action deliberately does not call sbatch.  A successful reset leaves
         the selected charge points PREPARED so a second, separately reviewed
         submission preview can use ``resources``.
         """
@@ -826,12 +822,12 @@ class WorkbenchController:
             try:
                 queue_state = str(scheduler.status(record.job_id).state).upper()
             except (OSError, RuntimeError, ValueError) as exc:
-                blocked.append(f"任务 {name} 的 PBS 状态查询失败: {exc}")
+                blocked.append(f"任务 {name} 的 SLURM 状态查询失败: {exc}")
                 continue
             if queue_state in {"R", "RUNNING", "CONFIGURING", "COMPLETING", "UNKNOWN"}:
-                blocked.append(f"任务 {name} 当前为 RUNNING/UNKNOWN，禁止 qdel")
+                blocked.append(f"任务 {name} 当前为 RUNNING/UNKNOWN，禁止 scancel")
             elif queue_state not in {"Q", "QUEUED", "PENDING", "SUBMITTED", "MISSING"}:
-                blocked.append(f"任务 {name} 当前 PBS 状态不允许重置: {queue_state}")
+                blocked.append(f"任务 {name} 当前 SLURM 状态不允许重置: {queue_state}")
 
         payload = _ResetQueuedPayload(
             config=reset_config,
@@ -847,12 +843,12 @@ class WorkbenchController:
             target_jobs=names,
             title="取消旧任务并准备更换节点",
             reason=(
-                "第一步重新查询 PBS 并安全取消仍在排队的旧任务；成功后任务回到 "
+                "第一步重新查询 SLURM 并安全取消仍在排队的旧任务；成功后任务回到 "
                 "PREPARED。第二步需由用户再次按 S，独立预览并提交到所选节点。"
             ),
             scheduler_request=resources,
-            commands_summary=(f"qstat × {len(names)}", f"qdel ≤ {len(names)}"),
-            warnings=("本操作不会调用 qsub，不会自动创建新任务。",),
+            commands_summary=(f"squeue × {len(names)}", f"scancel ≤ {len(names)}"),
+            warnings=("本操作不会调用 sbatch，不会自动创建新任务。",),
             blocked_reason="；".join(blocked),
         )
         self._activate(plan, payload)
@@ -941,23 +937,23 @@ class WorkbenchController:
             except FileExistsError as exc:
                 error = ActionError(
                     step="reconcile-neutral-submit",
-                    summary="已有提交 owner 占用当前 Case，已取消 qsub",
-                    command="qsub",
+                    summary="已有提交 owner 占用当前 Case，已取消 sbatch",
+                    command="sbatch",
                     raw=f"atomic submission claim failed: {exc}",
-                    suggestion="读取现有恢复屏障并人工核对 PBS；禁止再次提交。",
-                    summary_en="Another submission owner already claimed this Case; qsub was cancelled",
-                    suggestion_en="Inspect the existing barrier and reconcile PBS manually; do not resubmit.",
+                    suggestion="读取现有恢复屏障并人工核对 SLURM；禁止再次提交。",
+                    summary_en="Another submission owner already claimed this Case; sbatch was cancelled",
+                    suggestion_en="Inspect the existing barrier and reconcile SLURM manually; do not resubmit.",
                 )
                 return ActionResult(plan.action_id, "blocked", self.snapshot(), error.summary, ok=False, error=error)
             except (OSError, RuntimeError, TypeError, ValueError) as exc:
                 error = ActionError(
                     step="submit-intent",
-                    summary="提交意图无法安全落盘，已取消 qsub",
-                    command="qsub",
+                    summary="提交意图无法安全落盘，已取消 sbatch",
+                    command="sbatch",
                     raw=f"write-ahead intent failed: {exc}",
-                    suggestion="修复用户状态目录写入问题后重新预览；本次没有调用 qsub。",
-                    summary_en="The submission intent could not be persisted; qsub was cancelled",
-                    suggestion_en="Fix the user-state write failure and review again; qsub was not called.",
+                    suggestion="修复用户状态目录写入问题后重新预览；本次没有调用 sbatch。",
+                    summary_en="The submission intent could not be persisted; sbatch was cancelled",
+                    suggestion_en="Fix the user-state write failure and review again; sbatch was not called.",
                 )
                 return ActionResult(
                     plan.action_id, "failed", self.snapshot(), error.summary,
@@ -973,9 +969,9 @@ class WorkbenchController:
                 )
                 raise
             scheduler = self.scheduler_factory(copy.deepcopy(payload.config.scheduler))
-            guarded_scheduler = _ValidatedPBSScheduler(
+            guarded_scheduler = _ValidatedSlurmScheduler(
                 scheduler,
-                strict_job_id=payload.config.scheduler.kind == "pbs",
+                strict_job_id=payload.config.scheduler.kind == "slurm",
                 on_accepted=lambda job_id: update_submission_receipt(
                     self.workdir,
                     replace(
@@ -996,7 +992,7 @@ class WorkbenchController:
                     confirmed=True,
                     require_prepared=True,
                 )
-            except _QsubAttemptError as exc:
+            except _SbatchAttemptError as exc:
                 try:
                     update_submission_receipt(
                         self.workdir,
@@ -1013,18 +1009,18 @@ class WorkbenchController:
                     pass
                 error = ActionError(
                     step="reconcile-neutral-submit",
-                    summary="qsub 调用后发生异常，提交状态未知",
-                    command="qsub",
+                    summary="sbatch 调用后发生异常，提交状态未知",
+                    command="sbatch",
                     raw=exc.raw,
-                    suggestion="禁止再次提交；请人工查询 PBS 并录入 Job ID 或确认未创建任务。",
-                    summary_en="An exception occurred after qsub was invoked; submission state is unknown",
-                    suggestion_en="Do not resubmit; query PBS and record the Job ID or confirm no job was created.",
+                    suggestion="禁止再次提交；请人工查询 SLURM 并录入 Job ID 或确认未创建任务。",
+                    summary_en="An exception occurred after sbatch was invoked; submission state is unknown",
+                    suggestion_en="Do not resubmit; query SLURM and record the Job ID or confirm no job was created.",
                 )
                 return ActionResult(
                     plan.action_id, "recovery-required", self.snapshot(),
                     error.summary, ok=False, error=error,
                 )
-            except _MalformedQsubOutputError as exc:
+            except _MalformedSbatchOutputError as exc:
                 try:
                     update_submission_receipt(
                         self.workdir,
@@ -1041,12 +1037,12 @@ class WorkbenchController:
                     pass
                 error = ActionError(
                     step="reconcile-neutral-submit",
-                    summary="qsub 已被调用，但返回内容无法解析",
-                    command="qsub",
+                    summary="sbatch 已被调用，但返回内容无法解析",
+                    command="sbatch",
                     raw=exc.raw,
-                    suggestion="禁止再次提交；请人工查询 PBS 并录入实际 Job ID。",
-                    summary_en="qsub was called, but its output could not be parsed",
-                    suggestion_en="Do not submit again; query PBS manually and record the actual Job ID.",
+                    suggestion="禁止再次提交；请人工查询 SLURM 并录入实际 Job ID。",
+                    summary_en="sbatch was called, but its output could not be parsed",
+                    suggestion_en="Do not submit again; query SLURM manually and record the actual Job ID.",
                 )
                 return ActionResult(plan.action_id, "recovery-required", self.snapshot(), error.summary, ok=False, error=error)
             except _AcceptedReceiptUpdateError as exc:
@@ -1057,12 +1053,12 @@ class WorkbenchController:
                 self._hard_submission_receipt = accepted
                 error = ActionError(
                     step="reconcile-neutral-submit",
-                    summary="qsub 已返回 Job ID，但 ACCEPTED receipt 更新失败",
-                    command="qsub",
+                    summary="sbatch 已返回 Job ID，但 ACCEPTED receipt 更新失败",
+                    command="sbatch",
                     raw=f"Job ID: {exc.job_id}; receipt update failed: {exc.cause}",
-                    suggestion="不要再次提交。当前进程已冻结该 Job ID；新进程必须人工查询 PBS。",
-                    summary_en="qsub returned a Job ID, but the ACCEPTED receipt update failed",
-                    suggestion_en="Do not submit again. This process retained the Job ID; a new process must query PBS manually.",
+                    suggestion="不要再次提交。当前进程已冻结该 Job ID；新进程必须人工查询 SLURM。",
+                    summary_en="sbatch returned a Job ID, but the ACCEPTED receipt update failed",
+                    suggestion_en="Do not submit again. This process retained the Job ID; a new process must query SLURM manually.",
                 )
                 return ActionResult(
                     plan.action_id, "recovery-required", self.snapshot(), error.summary, ok=False,
@@ -1072,11 +1068,11 @@ class WorkbenchController:
             except PostSubmitPersistenceError as exc:
                 error = ActionError(
                     step="recover-neutral-state",
-                    summary="qsub 已接受任务，但本地状态保存失败",
+                    summary="sbatch 已接受任务，但本地状态保存失败",
                     command=exc.command,
                     raw=f"Job ID: {exc.job_id}; {exc.cause}",
                     suggestion="不要再次提交。请执行“修复本地 Job ID”或人工核对该 Job ID。",
-                    summary_en="qsub accepted the job, but local state persistence failed",
+                    summary_en="sbatch accepted the job, but local state persistence failed",
                     suggestion_en="Do not submit again. Repair the local Job ID record or verify this Job ID manually.",
                 )
                 return ActionResult(
@@ -1088,22 +1084,22 @@ class WorkbenchController:
                 error = ActionError(
                     step="reconcile-neutral-submit" if cleanup_error else "submit-neutral",
                     summary=(
-                        "qsub 失败，但提交意图清理未完成"
+                        "sbatch 失败，但提交意图清理未完成"
                         if cleanup_error else "中性任务提交失败"
                     ),
-                    command="qsub",
+                    command="sbatch",
                     raw=str(exc) + (f"; intent cleanup failed: {cleanup_error}" if cleanup_error else ""),
                     suggestion=(
                         "提交恢复屏障仍存在；先人工核对并清理，禁止直接重试。"
-                        if cleanup_error else "检查队列、节点、资源和 PBS 权限后，重新预览并重试。"
+                        if cleanup_error else "检查队列、节点、资源和 SLURM 权限后，重新预览并重试。"
                     ),
                     summary_en=(
-                        "qsub failed, but submission-intent cleanup is incomplete"
+                        "sbatch failed, but submission-intent cleanup is incomplete"
                         if cleanup_error else "Neutral job submission failed"
                     ),
                     suggestion_en=(
                         "The recovery barrier remains; reconcile it manually before any retry."
-                        if cleanup_error else "Check the queue, node, resources, and PBS permissions, then review and retry."
+                        if cleanup_error else "Check the queue, node, resources, and SLURM permissions, then review and retry."
                     ),
                 )
                 return ActionResult(
@@ -1125,7 +1121,7 @@ class WorkbenchController:
                 error = ActionError(
                     step="recover-neutral-state",
                     summary="任务状态已保存，但 ACCEPTED receipt 清理失败",
-                    command="qsub",
+                    command="sbatch",
                     raw=f"Job ID: {job_id}; receipt cleanup failed: {exc}",
                     suggestion="不要再次提交；可执行本地状态修复以清理恢复屏障。",
                     summary_en="Job state was saved, but the ACCEPTED receipt could not be cleared",
@@ -1174,11 +1170,11 @@ class WorkbenchController:
                 except FileExistsError as exc:
                     error = ActionError(
                         step="reconcile-charge-submit",
-                        summary="已有提交恢复屏障，已停止后续 qsub",
-                        command="qsub",
+                        summary="已有提交恢复屏障，已停止后续 sbatch",
+                        command="sbatch",
                         raw=str(exc),
                         suggestion="先核对已记录的带电任务提交状态；不要重复提交。",
-                        summary_en="A submission recovery barrier already exists; remaining qsub calls were stopped",
+                        summary_en="A submission recovery barrier already exists; remaining sbatch calls were stopped",
                         suggestion_en="Reconcile the recorded charge submission before retrying.",
                     )
                     return ActionResult(
@@ -1193,11 +1189,11 @@ class WorkbenchController:
                 except (OSError, RuntimeError, TypeError, ValueError) as exc:
                     error = ActionError(
                         step="submit-intent",
-                        summary="带电任务提交意图无法落盘，未调用 qsub",
-                        command="qsub",
+                        summary="带电任务提交意图无法落盘，未调用 sbatch",
+                        command="sbatch",
                         raw=str(exc),
                         suggestion="修复用户状态目录后重新预览。",
-                        summary_en="The charge submission intent could not be persisted; qsub was not called",
+                        summary_en="The charge submission intent could not be persisted; sbatch was not called",
                         suggestion_en="Fix the user-state directory and review again.",
                     )
                     return ActionResult(
@@ -1210,9 +1206,9 @@ class WorkbenchController:
                         error=error,
                     )
 
-                guarded = _ValidatedPBSScheduler(
+                guarded = _ValidatedSlurmScheduler(
                     scheduler,
-                    strict_job_id=payload.config.scheduler.kind == "pbs",
+                    strict_job_id=payload.config.scheduler.kind == "slurm",
                     on_accepted=lambda job_id, current=intent: update_submission_receipt(
                         self.workdir,
                         replace(
@@ -1237,15 +1233,15 @@ class WorkbenchController:
                         confirmed=True,
                         require_prepared_check=True,
                     )
-                except (_QsubAttemptError, _MalformedQsubOutputError) as exc:
+                except (_SbatchAttemptError, _MalformedSbatchOutputError) as exc:
                     error = ActionError(
                         step="reconcile-charge-submit",
-                        summary=f"带电任务 {name} 调用 qsub 后状态未知",
-                        command="qsub",
+                        summary=f"带电任务 {name} 调用 sbatch 后状态未知",
+                        command="sbatch",
                         raw=getattr(exc, "raw", str(exc)),
-                        suggestion="禁止重复提交；请先查询 PBS 并核对该带电点。",
-                        summary_en=f"Charge job {name} has an unknown state after qsub",
-                        suggestion_en="Do not resubmit; query PBS and reconcile this charge point first.",
+                        suggestion="禁止重复提交；请先查询 SLURM 并核对该带电点。",
+                        summary_en=f"Charge job {name} has an unknown state after sbatch",
+                        suggestion_en="Do not resubmit; query SLURM and reconcile this charge point first.",
                     )
                     return ActionResult(
                         plan.action_id,
@@ -1265,11 +1261,11 @@ class WorkbenchController:
                     )
                     error = ActionError(
                         step="reconcile-charge-submit",
-                        summary=f"qsub 已接受带电任务 {name}，但 receipt 更新失败",
-                        command="qsub",
+                        summary=f"sbatch 已接受带电任务 {name}，但 receipt 更新失败",
+                        command="sbatch",
                         raw=f"Job ID: {exc.job_id}; {exc.cause}",
                         suggestion="不要再次提交；人工核对并修复该 Job ID。",
-                        summary_en=f"qsub accepted charge job {name}, but receipt persistence failed",
+                        summary_en=f"sbatch accepted charge job {name}, but receipt persistence failed",
                         suggestion_en="Do not resubmit; reconcile this Job ID manually.",
                     )
                     return ActionResult(
@@ -1301,15 +1297,15 @@ class WorkbenchController:
                     error = ActionError(
                         step="reconcile-charge-submit",
                         summary=(
-                            f"qsub 已接受带电任务 {name}，但本地状态保存失败"
+                            f"sbatch 已接受带电任务 {name}，但本地状态保存失败"
                             if accepted_id
                             else f"带电任务 {name} 提交未完成"
                         ),
-                        command="qsub",
+                        command="sbatch",
                         raw=str(exc),
-                        suggestion="检查提交恢复屏障和 PBS 队列后再决定是否重试。",
+                        suggestion="检查提交恢复屏障和 SLURM 队列后再决定是否重试。",
                         summary_en=f"Charge job {name} submission did not complete",
-                        suggestion_en="Inspect the recovery barrier and PBS queue before retrying.",
+                        suggestion_en="Inspect the recovery barrier and SLURM queue before retrying.",
                     )
                     return ActionResult(
                         plan.action_id,
@@ -1335,7 +1331,7 @@ class WorkbenchController:
                     error = ActionError(
                         step="reconcile-charge-submit",
                         summary=f"带电任务 {name} 已保存，但 receipt 清理失败",
-                        command="qsub",
+                        command="sbatch",
                         raw=f"Job ID: {job_id}; {exc}",
                         suggestion="不要重复提交；本地状态已包含该 Job ID。",
                         summary_en=f"Charge job {name} was saved, but receipt cleanup failed",
@@ -1382,7 +1378,7 @@ class WorkbenchController:
                 plan.action_id,
                 "prepared",
                 self.snapshot(),
-                "旧任务已安全清理，所选带电点已回到 PREPARED；请按 S 预览新的 qsub。",
+                "旧任务已安全清理，所选带电点已回到 PREPARED；请按 S 预览新的 sbatch。",
                 job_ids=reset,
             )
 
@@ -1523,7 +1519,7 @@ class WorkbenchController:
             self._record_reconcile_activity("confirm-no-job", "")
             return ActionResult(
                 plan.action_id, "reconciled", self.snapshot(),
-                "已确认 PBS 未创建任务并解除提交屏障。",
+                "已确认 SLURM 未创建任务并解除提交屏障。",
             )
         raise NotImplementedError("该动作的执行路径尚未接线")
 
@@ -1869,7 +1865,7 @@ class WorkbenchController:
         if receipt is None:
             raise RuntimeError(receipt_error or "没有需要修复的中性提交记录。")
         if receipt.status != "ACCEPTED" or not receipt.job_id:
-            raise RuntimeError("提交状态未知；必须先人工查询 PBS 并录入 Job ID。")
+            raise RuntimeError("提交状态未知；必须先人工查询 SLURM 并录入 Job ID。")
         identity = _case_identity(self.workdir)
         if (receipt.case_device, receipt.case_inode) != identity:
             raise RuntimeError("提交恢复记录属于不同的 Case 身份。")
@@ -1916,7 +1912,7 @@ class WorkbenchController:
                     "update",
                 ),
             ),
-            commands_summary=("repair state only (no qsub)",),
+            commands_summary=("repair state only (no sbatch)",),
         )
         return plan, _RecoveryPayload(
             receipt=receipt,
@@ -1984,10 +1980,10 @@ class WorkbenchController:
             effect=ACTION_EFFECTS["reconcile-neutral-submit"],
             target_case=self.workdir,
             target_jobs=("neutral",),
-            title="录入已查询到的 PBS Job ID",
-            reason="只修复本地状态，不会调用 qsub。",
+            title="录入已查询到的 SLURM Job ID",
+            reason="只修复本地状态，不会调用 sbatch。",
             file_diffs=(FileDiff(state_path, _read_regular_text(state_path), after, "update"),),
-            commands_summary=("record Job ID only (no qsub)",),
+            commands_summary=("record Job ID only (no sbatch)",),
         )
 
     def _verify_reconcile_payload(self, payload: _ReconcilePayload) -> None:
@@ -2027,7 +2023,7 @@ class WorkbenchController:
                 target="neutral",
                 result="reconciled",
                 new_job_id=job_id,
-                message="manual PBS reconciliation",
+                message="manual SLURM reconciliation",
             ),
             self.activity_state_root,
         )
@@ -2056,8 +2052,10 @@ class WorkbenchController:
 def _resources_from_config(config: KitConfig) -> ResourceRequest:
     return ResourceRequest.create(
         allocation="specified" if config.scheduler.nodes else "auto",
-        nodes=tuple(config.scheduler.nodes), cores=config.scheduler.cores,
-        queue=config.scheduler.queue, walltime=config.scheduler.walltime,
+        partition=config.scheduler.partition, nodes=tuple(config.scheduler.nodes),
+        node_count=config.scheduler.node_count, tasks=config.scheduler.tasks,
+        tasks_per_node=config.scheduler.tasks_per_node,
+        walltime=config.scheduler.walltime,
         script=config.scheduler.script,
     )
 
@@ -2065,14 +2063,12 @@ def _resources_from_config(config: KitConfig) -> ResourceRequest:
 def _config_with_resources(config: KitConfig, resources: ResourceRequest) -> KitConfig:
     result = copy.deepcopy(config)
     result.scheduler.nodes = list(resources.nodes)
-    result.scheduler.cores = resources.cores
-    result.scheduler.queue = resources.queue
+    result.scheduler.tasks = resources.tasks
+    result.scheduler.partition = resources.partition
+    result.scheduler.node_count = resources.node_count
+    result.scheduler.tasks_per_node = resources.tasks_per_node
     result.scheduler.walltime = resources.walltime
     result.scheduler.script = resources.script
-    result.workflow.qsub_ppn = resources.cores
-    result.workflow.qsub_queue = resources.queue
-    result.workflow.qsub_walltime = resources.walltime
-    result.workflow.pbs_file = resources.script
     result.validate()
     return result
 
@@ -2142,7 +2138,7 @@ def _submission_intent(
         case_inode=payload.case_identity[1],
         case_mode=stat.S_IFMT(workdir.stat().st_mode),
         job_id="",
-        command="qsub",
+        command="sbatch",
         resources=asdict(resources),
         timestamp=datetime.now().astimezone().isoformat(timespec="seconds"),
         state_before=payload.state_before,
@@ -2207,7 +2203,7 @@ def _charge_submission_intent(
         case_inode=payload.case_identity[1],
         case_mode=stat.S_IFMT(workdir.stat().st_mode),
         job_id="",
-        command="qsub",
+        command="sbatch",
         resources=resource_payload,
         timestamp=datetime.now().astimezone().isoformat(timespec="seconds"),
         state_before=payload.state_before,
@@ -2227,21 +2223,21 @@ class _AcceptedReceiptUpdateError(RuntimeError):
         super().__init__(f"job {job_id} accepted but receipt update failed: {cause}")
 
 
-class _MalformedQsubOutputError(RuntimeError):
+class _MalformedSbatchOutputError(RuntimeError):
     def __init__(self, raw: str) -> None:
         self.raw = raw
-        super().__init__(f"qsub returned malformed output: {raw!r}")
+        super().__init__(f"sbatch returned malformed output: {raw!r}")
 
 
-class _QsubAttemptError(RuntimeError):
+class _SbatchAttemptError(RuntimeError):
     def __init__(self, cause: BaseException) -> None:
         self.cause = cause
         self.raw = str(cause)
-        super().__init__(f"qsub attempt raised: {cause}")
+        super().__init__(f"sbatch attempt raised: {cause}")
 
 
-class _ValidatedPBSScheduler(PBSScheduler):
-    """Preserve PBS keyword overrides while rejecting non-job qsub output."""
+class _ValidatedSlurmScheduler(SlurmScheduler):
+    """Preserve SLURM keyword overrides while rejecting non-job sbatch output."""
 
     _JOB_ID = re.compile(r"^\d+(?:\[\d+\])?(?:\.[A-Za-z0-9._-]+)?$")
 
@@ -2250,13 +2246,13 @@ class _ValidatedPBSScheduler(PBSScheduler):
         self.on_accepted = on_accepted
         self.strict_job_id = strict_job_id
 
-    def submit(self, workdir: Path, pbs_file: str, **kwargs: Any) -> str:
+    def submit(self, workdir: Path, script: str, **kwargs: Any) -> str:
         try:
-            job_id = self.delegate.submit(workdir, pbs_file, **kwargs)
+            job_id = self.delegate.submit(workdir, script, **kwargs)
         except (KeyboardInterrupt, SystemExit):
             raise
         except BaseException as exc:
-            raise _QsubAttemptError(exc) from exc
+            raise _SbatchAttemptError(exc) from exc
         valid = (
             isinstance(job_id, str)
             and bool(job_id.strip())
@@ -2266,7 +2262,7 @@ class _ValidatedPBSScheduler(PBSScheduler):
             )
         )
         if not valid:
-            raise _MalformedQsubOutputError(str(job_id))
+            raise _MalformedSbatchOutputError(str(job_id))
         job_id = job_id.strip()
         if self.on_accepted is not None:
             try:

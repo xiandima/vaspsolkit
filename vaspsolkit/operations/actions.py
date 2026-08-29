@@ -40,11 +40,11 @@ class ResourceRequest:
     allocation: str
     partition: str
     nodes: Tuple[str, ...]
-    node_count: int
     tasks: int
-    tasks_per_node: int
     walltime: str
     script: str
+    node_count: int = 1
+    tasks_per_node: int = 96
     persist: bool = False
 
     @classmethod
@@ -54,11 +54,11 @@ class ResourceRequest:
         allocation: str,
         partition: str,
         nodes: Tuple[str, ...],
-        node_count: int,
         tasks: int,
-        tasks_per_node: int,
         walltime: str,
         script: str,
+        node_count: int = 1,
+        tasks_per_node: int = 96,
         persist: bool = False,
     ) -> "ResourceRequest":
         return cls(

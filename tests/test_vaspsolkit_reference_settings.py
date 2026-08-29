@@ -113,12 +113,12 @@ def test_init_explicit_reference_reaches_existing_incar_fast_path(tmp_path) -> N
     (tmp_path / "INCAR").write_text(
         "ENCUT = 450\nIBRION = 1\nNSW = 50\n", encoding="utf-8"
     )
-    (tmp_path / "vasp.pbs").write_text("#!/bin/bash\n", encoding="utf-8")
+    (tmp_path / "vasp.slurm").write_text("#!/bin/bash\n", encoding="utf-8")
 
     assert main(
         [
-            "init", "--workdir", str(tmp_path), "--scheduler", "pbs",
-            "--script", "vasp.pbs", "--she-reference", "4.44",
+            "init", "--workdir", str(tmp_path), "--scheduler", "slurm",
+            "--script", "vasp.slurm", "--she-reference", "4.44",
             "--she-reference-source", "DOI:example", "--yes",
         ],
         input_fn=lambda prompt: (_ for _ in ()).throw(AssertionError(prompt)),
@@ -260,7 +260,7 @@ def test_postprocess_menu_is_blocked_for_stale_reference_summary(tmp_path) -> No
     from vaspsolkit.interactive_menu import action_availability
     from vaspsolkit.menu_actions import action_by_code
 
-    for name in ("POSCAR", "INCAR", "KPOINTS", "POTCAR", "vasp.pbs"):
+    for name in ("POSCAR", "INCAR", "KPOINTS", "POTCAR", "vasp.slurm"):
         (tmp_path / name).write_text("input\n")
     write_kit_config(tmp_path / "vaspsolkit.json", KitConfig(workflow=WorkflowConfig(she_reference_confirmed=True)))
     summary = tmp_path / "results" / "summary.csv"

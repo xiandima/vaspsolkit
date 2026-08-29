@@ -80,8 +80,8 @@ def recommend_action(snapshot: GuideSnapshot) -> GuideAction:
     if queued:
         return GuideAction(
             name="monitor",
-            title_zh="同步 PBS 队列状态",
-            reason_zh="本地记录显示任务可能排队；先向 PBS 查询实时状态，再决定是否换节点或重新提交。",
+            title_zh="同步 SLURM 队列状态",
+            reason_zh="本地记录显示任务可能排队；先向 SLURM 查询实时状态，再决定是否换节点或重新提交。",
             effect=action_effect("monitor"),
             cli_command="monitor",
             enables_zh="安全判断是否需要节点调整或重新提交",

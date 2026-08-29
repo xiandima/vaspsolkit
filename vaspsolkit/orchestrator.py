@@ -15,7 +15,7 @@ from typing import Dict, List, Optional
 from .config import KitConfig
 from .convergence import check_job
 from .parsers import parse_outcar
-from .scheduler import PBSScheduler, plan_submission_batches, scheduler_from_config
+from .scheduler import SlurmScheduler, plan_submission_batches, scheduler_from_config
 from .state import JobRecord, WorkflowState, workflow_state_lock
 from .workflow import _write_charge_incar, atomic_copy, job_folder_path
 
@@ -55,7 +55,7 @@ class RecordedJobStatuses:
 
 
 class PostSubmitPersistenceError(RuntimeError):
-    """qsub succeeded, but recording its accepted Job ID failed."""
+    """sbatch succeeded, but recording its accepted Job ID failed."""
 
     def __init__(self, job_id: str, command: str, cause: BaseException) -> None:
         self.job_id = job_id
@@ -226,12 +226,12 @@ def submit_neutral_job(
             raise RuntimeError("neutral result is already marked CONVERGED; do not resubmit")
     scheduler = scheduler or scheduler_from_config(config.scheduler)
     kwargs = {"dry_run": dry_run}
-    if isinstance(scheduler, PBSScheduler):
+    if isinstance(scheduler, SlurmScheduler):
         kwargs.update(
             {
-                "queue": config.scheduler.queue,
-                "node": config.scheduler.nodes[0] if config.scheduler.nodes else None,
-                "ppn": config.scheduler.cores,
+                "partition": config.scheduler.partition,
+                "nodes": tuple(config.scheduler.nodes), "node_count": config.scheduler.node_count, "tasks_per_node": config.scheduler.tasks_per_node,
+                "tasks": config.scheduler.tasks,
                 "walltime": config.scheduler.walltime,
             }
         )
@@ -244,7 +244,7 @@ def submit_neutral_job(
     try:
         state.save(_state_path(base, state_path))
     except (OSError, RuntimeError, ValueError) as exc:
-        raise PostSubmitPersistenceError(job_id, "qsub", exc) from exc
+        raise PostSubmitPersistenceError(job_id, "sbatch", exc) from exc
     return state
 
 
@@ -473,7 +473,7 @@ def _apply_recorded_scheduler_state(
         record.status = "RUNNING"
         return
     if scheduler_state == "UNKNOWN":
-        # A failed/ambiguous qstat must not overwrite the last trusted state.
+        # A failed/ambiguous squeue must not overwrite the last trusted state.
         return
     if record.folder != ".":
         _reconcile_charge_record(base, record, queue_state)
@@ -690,7 +690,7 @@ def submission_preview(config: KitConfig, state: WorkflowState, scheduler=None) 
     global_active = sum(entry.state.upper() in ACTIVE_QUEUE_STATES for entry in queue)
     prepared = [name for name, job in state.jobs.items() if job.status == "PREPARED"]
     node_slots: List[str] = []
-    if isinstance(scheduler, PBSScheduler):
+    if isinstance(scheduler, SlurmScheduler):
         active = _workflow_active_count(state)
         if config.scheduler.nodes:
             if config.scheduler.max_inflight is None:
@@ -699,12 +699,10 @@ def submission_preview(config: KitConfig, state: WorkflowState, scheduler=None) 
                     for index in range(len(prepared))
                 ]
             else:
-                node_slots = scheduler.available_nodes(
-                    count=config.scheduler.max_inflight,
-                    min_node=config.workflow.qsub_min_node,
-                    ppn=config.scheduler.cores,
-                    selected_nodes=config.scheduler.nodes,
-                )
+                node_slots = [
+                    config.scheduler.nodes[index % len(config.scheduler.nodes)]
+                    for index in range(min(len(prepared), config.scheduler.max_inflight))
+                ]
         capacity = (
             len(node_slots)
             if config.scheduler.nodes and config.scheduler.max_inflight is not None
@@ -746,24 +744,24 @@ def submit_ready_jobs(
     scheduler = scheduler or scheduler_from_config(config.scheduler)
     preview = submission_preview(config, state, scheduler=scheduler)
     first_batch = preview["batches"][0] if preview["batches"] else []
-    node_slots = preview.get("node_slots", [])
     submitted: Dict[str, str] = {}
-    for index, name in enumerate(first_batch):
+    for name in first_batch:
         record = state.jobs[name]
         folder = base / record.folder
         _validate_job_inputs(folder, config.scheduler.script)
         kwargs = {"dry_run": dry_run}
-        if isinstance(scheduler, PBSScheduler):
+        if isinstance(scheduler, SlurmScheduler):
             kwargs.update(
                 {
                     "job_name": f"{base.name}-{name}",
-                    "queue": config.scheduler.queue,
-                    "ppn": config.scheduler.cores,
+                    "partition": config.scheduler.partition,
+                    "nodes": tuple(config.scheduler.nodes),
+                    "node_count": config.scheduler.node_count,
+                    "tasks": config.scheduler.tasks,
+                    "tasks_per_node": config.scheduler.tasks_per_node,
                     "walltime": config.scheduler.walltime,
                 }
             )
-            if index < len(node_slots):
-                kwargs["node"] = node_slots[index]
         job_id = scheduler.submit(folder, config.scheduler.script, **kwargs)
         submitted[name] = job_id
         if not dry_run:
@@ -803,22 +801,23 @@ def submit_selected_jobs(
 
     scheduler = scheduler or scheduler_from_config(config.scheduler)
     submitted: Dict[str, str] = {}
-    for index, name in enumerate(names):
+    for name in names:
         record = state.jobs[name]
         folder = base / record.folder
         _validate_job_inputs(folder, config.scheduler.script)
         kwargs = {"dry_run": dry_run}
-        if isinstance(scheduler, PBSScheduler):
+        if isinstance(scheduler, SlurmScheduler):
             kwargs.update(
                 {
                     "job_name": f"{base.name}-{name}",
-                    "queue": config.scheduler.queue,
-                    "ppn": config.scheduler.cores,
+                    "partition": config.scheduler.partition,
+                    "nodes": tuple(config.scheduler.nodes),
+                    "node_count": config.scheduler.node_count,
+                    "tasks": config.scheduler.tasks,
+                    "tasks_per_node": config.scheduler.tasks_per_node,
                     "walltime": config.scheduler.walltime,
                 }
             )
-            if config.scheduler.nodes:
-                kwargs["node"] = config.scheduler.nodes[index % len(config.scheduler.nodes)]
         job_id = scheduler.submit(folder, config.scheduler.script, **kwargs)
         submitted[name] = job_id
         if not dry_run:
@@ -880,7 +879,7 @@ def reset_queued_jobs(
     ]
     if unsupported:
         raise RuntimeError(
-            "selected charge job(s) are not currently QUEUED/SUBMITTED in PBS: "
+            "selected charge job(s) are not currently QUEUED/SUBMITTED in SLURM: "
             + ", ".join(unsupported)
         )
 
@@ -900,7 +899,7 @@ def reset_queued_jobs(
         state.save(state_file)
     if needs_review:
         raise RuntimeError(
-            "selected charge job(s) disappeared from PBS but have local outputs requiring review: "
+            "selected charge job(s) disappeared from SLURM but have local outputs requiring review: "
             + ", ".join(needs_review)
         )
 
@@ -926,11 +925,11 @@ def reset_queued_jobs(
             _update_charge_stage(state)
             state.save(state_file)
             raise RuntimeError(
-                "selected charge job disappeared from PBS but has local outputs requiring review: " + name
+                "selected charge job disappeared from SLURM but has local outputs requiring review: " + name
             )
         if current_state not in RESETTABLE_QUEUE_STATES:
             raise RuntimeError(
-                "selected charge job is no longer QUEUED/SUBMITTED in PBS: " + name
+                "selected charge job is no longer QUEUED/SUBMITTED in SLURM: " + name
             )
         try:
             scheduler.cancel(old_job_id)
@@ -945,7 +944,7 @@ def reset_queued_jobs(
                 _update_charge_stage(state)
                 state.save(state_file)
                 raise RuntimeError(
-                    "selected charge job disappeared from PBS but has local outputs requiring review: " + name
+                    "selected charge job disappeared from SLURM but has local outputs requiring review: " + name
                 )
         else:
             _mark_charge_prepared(record)

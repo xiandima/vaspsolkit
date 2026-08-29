@@ -266,10 +266,6 @@ def plan_case_initialization(
         raise ValueError("conflicting INCAR settings require manual resolution: " + details)
 
     workflow = copy.deepcopy(workflow_config) if workflow_config is not None else WorkflowConfig()
-    workflow.pbs_file = scheduler.script
-    workflow.qsub_ppn = scheduler.cores
-    workflow.qsub_queue = scheduler.queue
-    workflow.qsub_walltime = scheduler.walltime
     config = KitConfig(profile="vaspsol-sweep", workflow=workflow, scheduler=scheduler)
     config.validate()
     config_after = serialize_kit_config(config).decode("utf-8")
