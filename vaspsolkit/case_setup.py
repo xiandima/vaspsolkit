@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple
 
-from .config import KitConfig, SchedulerConfig, WorkflowConfig
+from .config import KitConfig, SchedulerConfig, WorkflowConfig, config_write_lock
 from .inputs import plan_neutral_vaspsol_update, suggest_encut, validate_potcar_order
 from .state import workflow_state_lock
 
@@ -253,7 +253,7 @@ def plan_case_initialization(
     workflow.qsub_walltime = scheduler.walltime
     config = KitConfig(profile="vaspsol-sweep", workflow=workflow, scheduler=scheduler)
     config.validate()
-    config_after = json.dumps(config.to_dict(), indent=2, sort_keys=True)
+    config_after = json.dumps(config.to_dict(), indent=2, sort_keys=True, allow_nan=False)
     state_after = json.dumps(
         {"jobs": {}, "neutral": None, "prepared_checked": False, "stage": "setup"},
         indent=2,
@@ -331,8 +331,9 @@ def _apply_case_initialization_locked(
         raise CaseInitializationApplyError("stage", path, exc) from exc
 
     try:
-        for temp_path, change in staged:
-            os.replace(temp_path, change.path)
+        with config_write_lock(case / CONFIG_FILENAME):
+            for temp_path, change in staged:
+                os.replace(temp_path, change.path)
     except BaseException as exc:
         _cleanup_staged(staged)
         raise CaseInitializationApplyError("replace", change.path, exc) from exc

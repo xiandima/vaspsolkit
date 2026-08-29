@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import fcntl
 import json
+import math
 import os
 import tempfile
+from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -50,7 +53,13 @@ def _require_int(value: Any, path: str) -> int:
 def _require_number(value: Any, path: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{path} must be a number")
-    return float(value)
+    try:
+        parsed = float(value)
+    except OverflowError as exc:
+        raise ValueError(f"{path} must be a finite number") from exc
+    if not math.isfinite(parsed):
+        raise ValueError(f"{path} must be a finite number")
+    return parsed
 
 
 def _string_list(value: Any, path: str, *, strip: bool = False) -> List[str]:
@@ -66,6 +75,18 @@ def _number_list(value: Any, path: str) -> List[float]:
         _require_number(item, f"{path}[{index}]")
         for index, item in enumerate(_require_list(value, path))
     ]
+
+
+@contextmanager
+def config_write_lock(target: Path):
+    lock_path = target.with_name(f".{target.name}.lock")
+    descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
 
 
 @dataclass
@@ -418,26 +439,38 @@ def write_kit_config(
 ) -> None:
     config.validate()
     target = Path(path)
-    data = json.dumps(config.to_dict(), indent=2, sort_keys=True).encode("utf-8")
+    data = json.dumps(
+        config.to_dict(), indent=2, sort_keys=True, allow_nan=False
+    ).encode("utf-8")
     fd, temporary = tempfile.mkstemp(prefix=f".{target.name}.", dir=str(target.parent))
     try:
         with os.fdopen(fd, "wb") as handle:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
-        if expected_current is not _NO_EXPECTED_BYTES:
-            actual = target.read_bytes() if target.exists() else None
-            if actual != expected_current:
-                raise RuntimeError(f"configuration changed before write: {target}")
-        os.replace(temporary, target)
-        directory_fd = os.open(target.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        with config_write_lock(target):
+            if expected_current is None:
+                os.link(temporary, target)
+                os.unlink(temporary)
+                temporary = None
+            else:
+                if expected_current is not _NO_EXPECTED_BYTES:
+                    actual = target.read_bytes() if target.exists() else None
+                    if actual != expected_current:
+                        raise RuntimeError(f"configuration changed before write: {target}")
+                os.replace(temporary, target)
+                temporary = None
+            directory_fd = os.open(
+                target.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+            )
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
     except BaseException:
-        try:
-            os.unlink(temporary)
-        except FileNotFoundError:
-            pass
+        if temporary is not None:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
         raise

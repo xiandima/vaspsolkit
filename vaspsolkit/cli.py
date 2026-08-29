@@ -97,12 +97,11 @@ def main(
         target_exists = target.exists()
         if target_exists and not same_file and not args.force:
             raise FileExistsError(f"output already exists; use --force to replace it: {target}")
-        guarded_write = same_file or args.force
-        target_snapshot = target.read_bytes() if guarded_write and target_exists else None
+        target_snapshot = target.read_bytes() if target_exists else None
 
         current = json.loads(source_bytes.decode("utf-8"))
         migrated = migrate_config_data(current)
-        migrated_text = json.dumps(migrated, indent=2, sort_keys=True)
+        migrated_text = json.dumps(migrated, indent=2, sort_keys=True, allow_nan=False)
         if args.force and target_exists and not same_file:
             preview_bytes = target_snapshot
             preview_path = target
@@ -125,10 +124,7 @@ def main(
             output("migration cancelled")
             return 1
         config = KitConfig.from_dict(migrated)
-        if guarded_write:
-            write_kit_config(target, config, expected_current=target_snapshot)
-        else:
-            write_kit_config(target, config)
+        write_kit_config(target, config, expected_current=target_snapshot)
         output(f"wrote {args.output}")
         return 0
     if args.command == "reaction":

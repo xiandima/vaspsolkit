@@ -21,7 +21,7 @@ from ..case_setup import (
     apply_case_initialization,
     plan_case_initialization,
 )
-from ..config import KitConfig, SchedulerConfig, load_kit_config
+from ..config import KitConfig, SchedulerConfig, config_write_lock, load_kit_config
 from ..orchestrator import (
     PostSubmitPersistenceError,
     RecordedJobStatuses,
@@ -560,7 +560,9 @@ class WorkbenchController:
             )
             submit_config = _config_with_resources(config, resources)
             config_after = (
-                json.dumps(submit_config.to_dict(), indent=2, sort_keys=True)
+                json.dumps(
+                    submit_config.to_dict(), indent=2, sort_keys=True, allow_nan=False
+                )
                 if resources.persist else ""
             )
             file_diffs = (
@@ -618,7 +620,9 @@ class WorkbenchController:
                 )
             submit_config = _config_with_resources(config, resources)
             config_after = (
-                json.dumps(submit_config.to_dict(), indent=2, sort_keys=True)
+                json.dumps(
+                    submit_config.to_dict(), indent=2, sort_keys=True, allow_nan=False
+                )
                 if resources.persist
                 else ""
             )
@@ -897,14 +901,14 @@ class WorkbenchController:
             if not isinstance(payload, _ConfigPayload):
                 raise RuntimeError("资源配置计划载荷已失效，请重新预览。")
             self._verify_config_payload(payload)
-            _atomic_write_text(self.config_path, payload.after)
+            _atomic_write_text(self.config_path, payload.after, config=True)
             return ActionResult(plan.action_id, "completed", self.snapshot(), "Case 默认资源已保存。")
         if plan.action_id == "submit-neutral":
             if not isinstance(payload, _SubmitPayload):
                 raise RuntimeError("中性提交计划载荷已失效，请重新预览。")
             self._verify_submit_payload(payload)
             if payload.config_after:
-                _atomic_write_text(self.config_path, payload.config_after)
+                _atomic_write_text(self.config_path, payload.config_after, config=True)
             intent = _submission_intent(self.workdir, payload, plan.scheduler_request)
             try:
                 claim_submission_receipt(
@@ -1119,7 +1123,7 @@ class WorkbenchController:
                 raise RuntimeError("带电任务提交计划载荷已失效，请重新预览。")
             self._verify_charge_submit_payload(payload)
             if payload.config_after:
-                _atomic_write_text(self.config_path, payload.config_after)
+                _atomic_write_text(self.config_path, payload.config_after, config=True)
             submitted_ids = {}
             scheduler = self.scheduler_factory(copy.deepcopy(payload.config.scheduler))
             for name in payload.selected:
@@ -2409,7 +2413,7 @@ def _directory_fingerprint_stats(root: _EntryFingerprint) -> tuple[int, str]:
     return total_size, digest.hexdigest()
 
 
-def _atomic_write_text(path: Path, value: str) -> None:
+def _atomic_write_text(path: Path, value: str, *, config: bool = False) -> None:
     descriptor, raw_temp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     temp = Path(raw_temp)
     try:
@@ -2417,12 +2421,20 @@ def _atomic_write_text(path: Path, value: str) -> None:
             handle.write(value)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temp, path)
-        directory = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+        if config:
+            with config_write_lock(path):
+                _replace_and_fsync(temp, path)
+        else:
+            _replace_and_fsync(temp, path)
     except BaseException:
         temp.unlink(missing_ok=True)
         raise
+
+
+def _replace_and_fsync(temp: Path, path: Path) -> None:
+    os.replace(temp, path)
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)

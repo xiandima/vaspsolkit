@@ -9,7 +9,7 @@ import pytest
 from vaspsolkit import cli as cli_module
 from vaspsolkit import config as config_module
 from vaspsolkit.cli import main
-from vaspsolkit.config import KitConfig, SchedulerConfig, WorkflowConfig
+from vaspsolkit.config import KitConfig, SchedulerConfig, WorkflowConfig, write_kit_config
 
 
 def test_kit_config_defaults_to_version_2() -> None:
@@ -183,6 +183,71 @@ def test_migrate_rejects_coercive_or_malformed_schema_values(data, error_path) -
         config_module.migrate_config_data(data)
 
     assert error_path in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(float("nan"), id="nan"),
+        pytest.param(float("inf"), id="positive-infinity"),
+        pytest.param(float("-inf"), id="negative-infinity"),
+    ],
+)
+def test_migrate_rejects_non_finite_scalar_with_path(value) -> None:
+    with pytest.raises(ValueError) as error:
+        config_module.migrate_config_data(
+            {"config_version": 2, "workflow": {"nelect_ref": value}}
+        )
+
+    assert "workflow.nelect_ref" in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(float("nan"), id="nan"),
+        pytest.param(float("inf"), id="positive-infinity"),
+        pytest.param(float("-inf"), id="negative-infinity"),
+    ],
+)
+def test_migrate_rejects_non_finite_list_item_with_path(value) -> None:
+    with pytest.raises(ValueError) as error:
+        config_module.migrate_config_data(
+            {"config_version": 2, "workflow": {"target_potentials": [value]}}
+        )
+
+    assert "workflow.target_potentials[0]" in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("workflow", "error_path"),
+    [
+        ({"nelect_ref": 10**10000}, "workflow.nelect_ref"),
+        ({"target_potentials": [10**10000]}, "workflow.target_potentials[0]"),
+    ],
+)
+def test_migrate_wraps_oversized_numeric_conversion_as_value_error(
+    workflow, error_path
+) -> None:
+    with pytest.raises(ValueError) as error:
+        config_module.migrate_config_data(
+            {"config_version": 2, "workflow": workflow}
+        )
+
+    assert error_path in str(error.value)
+
+
+def test_write_kit_config_rejects_non_finite_serialization(tmp_path) -> None:
+    target = tmp_path / "config.json"
+    config = KitConfig(
+        profile="vaspsol-neutral-relax",
+        workflow=WorkflowConfig(target_potentials=[float("nan")]),
+    )
+
+    with pytest.raises(ValueError):
+        write_kit_config(target, config)
+
+    assert not target.exists()
 
 
 def test_migrate_v1_slurm_maps_resources_and_removes_pbs_workflow_keys() -> None:
@@ -446,6 +511,38 @@ def test_migrate_cli_rejects_concurrent_destination_change(tmp_path, monkeypatch
                 "--yes",
                 "--force",
             ]
+        )
+
+    assert target.read_bytes() == concurrent_bytes
+
+
+def test_migrate_cli_rejects_concurrently_created_new_destination(
+    tmp_path, monkeypatch
+) -> None:
+    source = tmp_path / "v1.json"
+    target = tmp_path / "new.json"
+    source.write_text(
+        json.dumps(
+            {
+                "config_version": 1,
+                "workflow": {},
+                "scheduler": {"kind": "slurm"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    concurrent_bytes = b"created after preview\n"
+    real_write = cli_module.write_kit_config
+
+    def concurrent_create(path, config, **kwargs):
+        path.write_bytes(concurrent_bytes)
+        return real_write(path, config, **kwargs)
+
+    monkeypatch.setattr(cli_module, "write_kit_config", concurrent_create)
+
+    with pytest.raises(FileExistsError):
+        main(
+            ["migrate", "--input", str(source), "--output", str(target), "--yes"]
         )
 
     assert target.read_bytes() == concurrent_bytes
