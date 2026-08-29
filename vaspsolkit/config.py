@@ -17,7 +17,8 @@ from .reference_settings import validate_she_reference
 DEFAULT_FOLDERS = ["1", "2", "3", "4", "5"]
 DEFAULT_OFFSETS = [-1.0, -0.5, 0.0, 0.5, 1.0]
 DEFAULT_COPY_FILES = ["INCAR", "POTCAR", "KPOINTS", "CHGCAR"]
-_NO_EXPECTED_BYTES = object()
+EXPECT_ABSENT = object()
+NO_EXPECTATION = object()
 
 
 def _require_object(value: Any, path: str) -> Dict[str, Any]:
@@ -431,17 +432,28 @@ def load_kit_config(path: Optional[Path]) -> KitConfig:
     return config
 
 
-def write_kit_config(
-    path: Path,
-    config: KitConfig,
-    *,
-    expected_current: Any = _NO_EXPECTED_BYTES,
-) -> None:
+def serialize_kit_config(config: KitConfig) -> bytes:
     config.validate()
-    target = Path(path)
-    data = json.dumps(
+    return json.dumps(
         config.to_dict(), indent=2, sort_keys=True, allow_nan=False
     ).encode("utf-8")
+
+
+def write_config_bytes(
+    path: Path,
+    data: bytes,
+    *,
+    expected_current: Any = NO_EXPECTATION,
+) -> None:
+    target = Path(path)
+    if not isinstance(data, bytes):
+        raise TypeError("config data must be bytes")
+    if (
+        expected_current is not EXPECT_ABSENT
+        and expected_current is not NO_EXPECTATION
+        and not isinstance(expected_current, bytes)
+    ):
+        raise TypeError("expected_current must be EXPECT_ABSENT, exact bytes, or NO_EXPECTATION")
     fd, temporary = tempfile.mkstemp(prefix=f".{target.name}.", dir=str(target.parent))
     try:
         with os.fdopen(fd, "wb") as handle:
@@ -449,12 +461,12 @@ def write_kit_config(
             handle.flush()
             os.fsync(handle.fileno())
         with config_write_lock(target):
-            if expected_current is None:
+            if expected_current is EXPECT_ABSENT:
                 os.link(temporary, target)
                 os.unlink(temporary)
                 temporary = None
             else:
-                if expected_current is not _NO_EXPECTED_BYTES:
+                if expected_current is not NO_EXPECTATION:
                     actual = target.read_bytes() if target.exists() else None
                     if actual != expected_current:
                         raise RuntimeError(f"configuration changed before write: {target}")
@@ -474,3 +486,16 @@ def write_kit_config(
             except FileNotFoundError:
                 pass
         raise
+
+
+def write_kit_config(
+    path: Path,
+    config: KitConfig,
+    *,
+    expected_current: Any = NO_EXPECTATION,
+) -> None:
+    write_config_bytes(
+        path,
+        serialize_kit_config(config),
+        expected_current=expected_current,
+    )

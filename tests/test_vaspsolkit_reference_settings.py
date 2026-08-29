@@ -146,6 +146,38 @@ def test_configure_reference_explicitly_updates_only_reference_fields(tmp_path) 
     assert config.scheduler.tasks == 96
 
 
+def test_configure_reference_preserves_concurrent_valid_update(tmp_path, monkeypatch) -> None:
+    from vaspsolkit import cli as cli_module
+    from vaspsolkit.cli import main
+    from vaspsolkit.config import KitConfig, load_kit_config, write_kit_config
+
+    path = tmp_path / "vaspsolkit.json"
+    write_kit_config(path, KitConfig())
+    real_write = cli_module.write_kit_config
+    concurrent = KitConfig()
+    concurrent.scheduler.partition = "concurrent"
+
+    def interleaved_write(target, config, **kwargs):
+        real_write(target, concurrent)
+        return real_write(target, config, **kwargs)
+
+    monkeypatch.setattr(cli_module, "write_kit_config", interleaved_write)
+
+    with pytest.raises(RuntimeError, match="changed"):
+        main(
+            [
+                "configure-reference",
+                "--workdir",
+                str(tmp_path),
+                "--she-reference",
+                "4.44",
+                "--yes",
+            ]
+        )
+
+    assert load_kit_config(path).scheduler.partition == "concurrent"
+
+
 def test_reference_freshness_distinguishes_missing_current_stale_and_unknown(tmp_path) -> None:
     import csv
 

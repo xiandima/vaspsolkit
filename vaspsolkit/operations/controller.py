@@ -21,7 +21,14 @@ from ..case_setup import (
     apply_case_initialization,
     plan_case_initialization,
 )
-from ..config import KitConfig, SchedulerConfig, config_write_lock, load_kit_config
+from ..config import (
+    NO_EXPECTATION,
+    KitConfig,
+    SchedulerConfig,
+    load_kit_config,
+    serialize_kit_config,
+    write_config_bytes,
+)
 from ..orchestrator import (
     PostSubmitPersistenceError,
     RecordedJobStatuses,
@@ -111,6 +118,7 @@ class _NeutralPayload:
 class _ConfigPayload:
     case_identity: Tuple[int, int]
     fingerprint: _EntryFingerprint
+    before: bytes
     after: str
 
 
@@ -120,6 +128,7 @@ class _SubmitPayload:
     case_identity: Tuple[int, int]
     fingerprints: Tuple[_EntryFingerprint, ...]
     state_before: dict
+    config_before: bytes
     config_after: str = ""
 
 
@@ -130,6 +139,7 @@ class _ChargeSubmitPayload:
     case_identity: Tuple[int, int]
     fingerprints: Tuple[_EntryFingerprint, ...]
     state_before: dict
+    config_before: bytes
     config_after: str = ""
 
 
@@ -374,10 +384,11 @@ class WorkbenchController:
         config_path = self.config_path
         if config_path.is_symlink() or not config_path.is_file():
             raise ValueError("vaspsolkit.json must be a regular file within the Case")
+        before_bytes = config_path.read_bytes()
         config = load_kit_config(config_path)
         updated = _config_with_resources(config, resources)
-        after = json.dumps(updated.to_dict(), indent=2, sort_keys=True)
-        before = config_path.read_text(encoding="utf-8")
+        after = serialize_kit_config(updated).decode("utf-8")
+        before = before_bytes.decode("utf-8")
         plan = ActionPlan(
             action_id="save-resources",
             effect=ACTION_EFFECTS["save-resources"],
@@ -390,7 +401,12 @@ class WorkbenchController:
         )
         self._activate(
             plan,
-            _ConfigPayload(_case_identity(self.workdir), _fingerprint(self.workdir, config_path), after),
+            _ConfigPayload(
+                _case_identity(self.workdir),
+                _fingerprint(self.workdir, config_path),
+                before_bytes,
+                after,
+            ),
         )
         return plan
 
@@ -533,6 +549,7 @@ class WorkbenchController:
             self.preview_resources(resources)
             config_path = self.config_path
             state_path = self.workdir / STATE_FILENAME
+            config_before = config_path.read_bytes()
             config = load_kit_config(config_path)
             receipt, receipt_error = self._submission_barrier()
             state = (
@@ -560,13 +577,11 @@ class WorkbenchController:
             )
             submit_config = _config_with_resources(config, resources)
             config_after = (
-                json.dumps(
-                    submit_config.to_dict(), indent=2, sort_keys=True, allow_nan=False
-                )
+                serialize_kit_config(submit_config).decode("utf-8")
                 if resources.persist else ""
             )
             file_diffs = (
-                (FileDiff(config_path, config_path.read_text(encoding="utf-8"), config_after, "update"),)
+                (FileDiff(config_path, config_before.decode("utf-8"), config_after, "update"),)
                 if resources.persist else ()
             )
             payload = _SubmitPayload(
@@ -574,6 +589,7 @@ class WorkbenchController:
                 case_identity=_case_identity(self.workdir),
                 fingerprints=fingerprints,
                 state_before=_workflow_state_dict(state),
+                config_before=config_before,
                 config_after=config_after,
             )
             plan = ActionPlan(
@@ -594,6 +610,7 @@ class WorkbenchController:
             state_path = self.workdir / STATE_FILENAME
             config_path = self.config_path
             state = WorkflowState.load(state_path)
+            config_before = config_path.read_bytes()
             config = load_kit_config(config_path)
             unknown = tuple(name for name in names if name not in state.jobs)
             not_prepared = tuple(
@@ -620,9 +637,7 @@ class WorkbenchController:
                 )
             submit_config = _config_with_resources(config, resources)
             config_after = (
-                json.dumps(
-                    submit_config.to_dict(), indent=2, sort_keys=True, allow_nan=False
-                )
+                serialize_kit_config(submit_config).decode("utf-8")
                 if resources.persist
                 else ""
             )
@@ -630,7 +645,7 @@ class WorkbenchController:
                 (
                     FileDiff(
                         config_path,
-                        config_path.read_text(encoding="utf-8"),
+                        config_before.decode("utf-8"),
                         config_after,
                         "update",
                     ),
@@ -664,6 +679,7 @@ class WorkbenchController:
                 case_identity=_case_identity(self.workdir),
                 fingerprints=fingerprints,
                 state_before=_workflow_state_dict(state),
+                config_before=config_before,
                 config_after=config_after,
             )
             plan = ActionPlan(
@@ -901,14 +917,22 @@ class WorkbenchController:
             if not isinstance(payload, _ConfigPayload):
                 raise RuntimeError("资源配置计划载荷已失效，请重新预览。")
             self._verify_config_payload(payload)
-            _atomic_write_text(self.config_path, payload.after, config=True)
+            _atomic_write_text(
+                self.config_path,
+                payload.after,
+                expected_config=payload.before,
+            )
             return ActionResult(plan.action_id, "completed", self.snapshot(), "Case 默认资源已保存。")
         if plan.action_id == "submit-neutral":
             if not isinstance(payload, _SubmitPayload):
                 raise RuntimeError("中性提交计划载荷已失效，请重新预览。")
             self._verify_submit_payload(payload)
             if payload.config_after:
-                _atomic_write_text(self.config_path, payload.config_after, config=True)
+                _atomic_write_text(
+                    self.config_path,
+                    payload.config_after,
+                    expected_config=payload.config_before,
+                )
             intent = _submission_intent(self.workdir, payload, plan.scheduler_request)
             try:
                 claim_submission_receipt(
@@ -1123,7 +1147,11 @@ class WorkbenchController:
                 raise RuntimeError("带电任务提交计划载荷已失效，请重新预览。")
             self._verify_charge_submit_payload(payload)
             if payload.config_after:
-                _atomic_write_text(self.config_path, payload.config_after, config=True)
+                _atomic_write_text(
+                    self.config_path,
+                    payload.config_after,
+                    expected_config=payload.config_before,
+                )
             submitted_ids = {}
             scheduler = self.scheduler_factory(copy.deepcopy(payload.config.scheduler))
             for name in payload.selected:
@@ -2413,7 +2441,19 @@ def _directory_fingerprint_stats(root: _EntryFingerprint) -> tuple[int, str]:
     return total_size, digest.hexdigest()
 
 
-def _atomic_write_text(path: Path, value: str, *, config: bool = False) -> None:
+def _atomic_write_text(
+    path: Path,
+    value: str,
+    *,
+    expected_config: Any = NO_EXPECTATION,
+) -> None:
+    if expected_config is not NO_EXPECTATION:
+        write_config_bytes(
+            path,
+            value.encode("utf-8"),
+            expected_current=expected_config,
+        )
+        return
     descriptor, raw_temp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     temp = Path(raw_temp)
     try:
@@ -2421,11 +2461,7 @@ def _atomic_write_text(path: Path, value: str, *, config: bool = False) -> None:
             handle.write(value)
             handle.flush()
             os.fsync(handle.fileno())
-        if config:
-            with config_write_lock(path):
-                _replace_and_fsync(temp, path)
-        else:
-            _replace_and_fsync(temp, path)
+        _replace_and_fsync(temp, path)
     except BaseException:
         temp.unlink(missing_ok=True)
         raise

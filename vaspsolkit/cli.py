@@ -13,11 +13,13 @@ from typing import Callable, List, Optional, Sequence
 from .analysis import analyze_adsorption, analyze_rows, read_summary, write_analysis
 from .case_setup import apply_case_initialization, plan_case_initialization
 from .config import (
+    EXPECT_ABSENT,
     KitConfig,
     SchedulerConfig,
     WorkflowConfig,
     load_kit_config,
     migrate_config_data,
+    serialize_kit_config,
     write_kit_config,
 )
 from .convergence import DiagnosticResult, apply_repair, propose_repair
@@ -101,7 +103,8 @@ def main(
 
         current = json.loads(source_bytes.decode("utf-8"))
         migrated = migrate_config_data(current)
-        migrated_text = json.dumps(migrated, indent=2, sort_keys=True, allow_nan=False)
+        config = KitConfig.from_dict(migrated)
+        migrated_text = serialize_kit_config(config).decode("utf-8")
         if args.force and target_exists and not same_file:
             preview_bytes = target_snapshot
             preview_path = target
@@ -123,8 +126,8 @@ def main(
         if not args.yes and not _confirm("Write migrated config?", input_fn):
             output("migration cancelled")
             return 1
-        config = KitConfig.from_dict(migrated)
-        write_kit_config(target, config, expected_current=target_snapshot)
+        expected_current = target_snapshot if target_exists else EXPECT_ABSENT
+        write_kit_config(target, config, expected_current=expected_current)
         output(f"wrote {args.output}")
         return 0
     if args.command == "reaction":
@@ -483,8 +486,9 @@ def _cmd_init(args, input_fn: InputFn, output: OutputFn) -> int:
         scheduler.submit_command = submit.split()
     config = KitConfig(profile=profile, workflow=workflow, scheduler=scheduler)
     config_path = Path(args.config) if args.config else workdir / "vaspsolkit.json"
+    config_before = config_path.read_bytes() if config_path.exists() else EXPECT_ABSENT
     incar_path.write_text(candidate, encoding="utf-8")
-    write_kit_config(config_path, config)
+    write_kit_config(config_path, config, expected_current=config_before)
     WorkflowState(stage="setup").save(workdir / STATE_FILENAME)
     output(f"wrote {incar_path}")
     output(f"wrote {config_path}")
@@ -512,13 +516,11 @@ def _cmd_configure_reference(args, input_fn: InputFn, output: OutputFn) -> int:
     if not args.yes and not _confirm("保存电化学参考参数？", input_fn):
         output("reference configuration cancelled")
         return 1
-    if config_path.read_bytes() != before:
-        raise RuntimeError("vaspsolkit.json 已变化，请重新预览")
     updated = copy.deepcopy(config)
     updated.workflow.she_reference = settings.value
     updated.workflow.she_reference_source = settings.source
     updated.workflow.she_reference_confirmed = True
-    write_kit_config(config_path, updated)
+    write_kit_config(config_path, updated, expected_current=before)
     output(f"wrote {config_path}")
     return 0
 
@@ -527,6 +529,7 @@ def _cmd_configure_scheduler(args, input_fn: InputFn, output: OutputFn) -> int:
     workdir = Path(args.workdir).resolve()
     workdir.mkdir(parents=True, exist_ok=True)
     config_path = Path(args.config) if args.config else workdir / "vaspsolkit.json"
+    config_before = config_path.read_bytes() if config_path.exists() else EXPECT_ABSENT
     config = load_kit_config(config_path) if config_path.exists() else KitConfig()
     if config.scheduler.kind != "pbs":
         raise ValueError("configure-scheduler currently supports only PBS")
@@ -576,7 +579,7 @@ def _cmd_configure_scheduler(args, input_fn: InputFn, output: OutputFn) -> int:
     config.workflow.qsub_ppn = cores
     config.workflow.qsub_queue = queue
     config.workflow.qsub_walltime = walltime
-    write_kit_config(config_path, config)
+    write_kit_config(config_path, config, expected_current=config_before)
     output(f"wrote {config_path}")
     output(f"nodes={','.join(nodes)} cores/job={cores}")
     return 0

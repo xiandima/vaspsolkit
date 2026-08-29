@@ -9,7 +9,12 @@ import pytest
 from vaspsolkit import cli as cli_module
 from vaspsolkit import config as config_module
 from vaspsolkit.cli import main
-from vaspsolkit.config import KitConfig, SchedulerConfig, WorkflowConfig, write_kit_config
+from vaspsolkit.config import (
+    KitConfig,
+    SchedulerConfig,
+    WorkflowConfig,
+    write_kit_config,
+)
 
 
 def test_kit_config_defaults_to_version_2() -> None:
@@ -246,6 +251,28 @@ def test_write_kit_config_rejects_non_finite_serialization(tmp_path) -> None:
 
     with pytest.raises(ValueError):
         write_kit_config(target, config)
+
+    assert not target.exists()
+
+
+def test_serialize_kit_config_is_canonical_and_rejects_nan() -> None:
+    config = KitConfig(profile="vaspsol-neutral-relax")
+
+    serialized = config_module.serialize_kit_config(config)
+
+    assert serialized == json.dumps(
+        config.to_dict(), indent=2, sort_keys=True, allow_nan=False
+    ).encode("utf-8")
+    config.workflow.target_potentials = [float("nan")]
+    with pytest.raises(ValueError):
+        config_module.serialize_kit_config(config)
+
+
+def test_config_write_expectation_modes_do_not_overload_none(tmp_path) -> None:
+    target = tmp_path / "config.json"
+
+    with pytest.raises(TypeError, match="expected_current"):
+        write_kit_config(target, KitConfig(), expected_current=None)
 
     assert not target.exists()
 

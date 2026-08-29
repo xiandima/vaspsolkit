@@ -144,6 +144,46 @@ def test_persisted_resource_defaults_use_reviewed_atomic_config_write(
     assert config.workflow.qsub_ppn == 48
 
 
+def test_resource_defaults_preserve_concurrent_valid_config_update(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vaspsolkit import config as config_module
+    from vaspsolkit.operations import controller as controller_module
+    from vaspsolkit.operations.actions import ResourceRequest
+    from vaspsolkit.operations.controller import WorkbenchController
+
+    (tmp_path / "vasp.slurm").write_text("#!/bin/sh\n", encoding="utf-8")
+    config_path = tmp_path / "vaspsolkit.json"
+    config_module.write_kit_config(config_path, config_module.KitConfig())
+    controller = WorkbenchController(tmp_path)
+    plan = controller.plan_resource_defaults(
+        ResourceRequest.create(
+            allocation="auto",
+            nodes=(),
+            cores=96,
+            queue="compute",
+            walltime="72:00:00",
+            script="vasp.slurm",
+            persist=True,
+        )
+    )
+    concurrent = config_module.KitConfig()
+    concurrent.scheduler.partition = "concurrent"
+    concurrent_bytes = config_module.serialize_kit_config(concurrent)
+    real_write = controller_module.write_config_bytes
+
+    def interleaved_write(path, data, **kwargs):
+        config_module.write_kit_config(path, concurrent)
+        return real_write(path, data, **kwargs)
+
+    monkeypatch.setattr(controller_module, "write_config_bytes", interleaved_write)
+
+    with pytest.raises(RuntimeError, match="changed"):
+        controller.execute(plan, confirmed=True)
+
+    assert config_path.read_bytes() == concurrent_bytes
+
+
 
 
 

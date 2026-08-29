@@ -187,6 +187,35 @@ def test_apply_writes_only_declared_files(tmp_path):
     assert json.loads((tmp_path / "vaspsolkit.json").read_text(encoding="utf-8"))["profile"] == "vaspsol-sweep"
 
 
+def test_apply_preserves_concurrent_config_created_at_write_boundary(tmp_path, monkeypatch):
+    from vaspsolkit import case_setup, config as config_module
+    from vaspsolkit.case_setup import apply_case_initialization, plan_case_initialization
+    from vaspsolkit.config import KitConfig, SchedulerConfig
+
+    _write_case(tmp_path)
+    (tmp_path / "vasp.slurm").write_text("#!/bin/sh\n", encoding="utf-8")
+    scheduler = SchedulerConfig(script="vasp.slurm")
+    scheduler.cores = scheduler.tasks
+    scheduler.queue = scheduler.partition
+    plan = plan_case_initialization(tmp_path, scheduler)
+    incar_before = (tmp_path / "INCAR").read_bytes()
+    concurrent = KitConfig(profile="vaspsol-neutral-relax")
+    concurrent.scheduler.partition = "concurrent"
+    concurrent_bytes = config_module.serialize_kit_config(concurrent)
+
+    def interleaved_write(path, data, **kwargs):
+        config_module.write_kit_config(path, concurrent)
+        return config_module.write_config_bytes(path, data, **kwargs)
+
+    monkeypatch.setattr(case_setup, "write_config_bytes", interleaved_write, raising=False)
+
+    with pytest.raises(RuntimeError):
+        apply_case_initialization(plan, confirmed=True)
+
+    assert (tmp_path / "vaspsolkit.json").read_bytes() == concurrent_bytes
+    assert (tmp_path / "INCAR").read_bytes() == incar_before
+
+
 @pytest.mark.parametrize(
     "mutation",
     [
