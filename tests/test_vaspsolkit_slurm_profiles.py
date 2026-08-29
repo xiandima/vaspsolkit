@@ -45,7 +45,7 @@ source /etc/profile.d/modules.sh
 module load compiler/2024 mpi/5
 module load vasp/6.4
 
-mpirun -np 96 vasp_legacy > vasp.log 2>&1
+mpirun -np 96 vasp_ncl > vasp.log 2>&1
 """
 
     profile = import_slurm_profile(script, "generic")
@@ -213,8 +213,8 @@ source /etc/profile.d/modules.sh
 module load vasp/6.4
 export OMP_NUM_THREADS=1
 echo /data/vasp_std/reference
-# mpirun -np 64 vasp_legacy > ignored.log
-mpirun -np 64 vasp_legacy > old.log 2>&1
+# mpirun -np 64 vasp_ncl > ignored.log
+mpirun -np 64 vasp_ncl > old.log 2>&1
 echo done
 """
 
@@ -236,7 +236,7 @@ echo done
     assert "module load vasp/6.4" in after
     assert "export OMP_NUM_THREADS=1" in after
     assert "echo /data/vasp_std/reference" in after
-    assert "# mpirun -np 64 vasp_legacy > ignored.log" in after
+    assert "# mpirun -np 64 vasp_ncl > ignored.log" in after
     assert after.count(
         "mpirun -np ${SLURM_NTASKS:-48} vasp_std > vasp.log 2>&1"
     ) == 1
@@ -257,6 +257,55 @@ def test_rewrite_explicit_nodes_writes_exactly_one_nodelist() -> None:
     assert after.count("#SBATCH --nodelist=node01,node02") == 1
     assert after.count("nodelist") == 1
     assert "-w old01" not in after
+
+
+def test_rewrite_mixed_resource_options_retains_unrelated_flags_and_comments() -> None:
+    before = (
+        "#!/bin/bash\n"
+        "#SBATCH -p old --exclusive --account=chem # allocation policy\n"
+        "#SBATCH -w=node01 --qos urgent # inherited placement\n"
+        "true\n"
+    )
+
+    after = rewrite_slurm_resources(before, _profile())
+
+    assert after.count("--partition=compute") == 1
+    assert (
+        "#SBATCH --partition=compute --exclusive --account=chem # allocation policy"
+        in after
+    )
+    assert "#SBATCH --qos urgent # inherited placement" in after
+    assert "-w=node01" not in after
+    assert "--nodelist" not in after
+
+
+def test_rewrite_mixed_nodelist_writes_one_explicit_replacement() -> None:
+    before = "#SBATCH --nodelist node00 --exclusive # keep flag\ntrue\n"
+    profile = _profile(nodes=("node01",), node_count=1)
+
+    after = rewrite_slurm_resources(before, profile)
+
+    assert after.count("#SBATCH --nodelist=node01") == 1
+    assert "#SBATCH --exclusive # keep flag" in after
+    assert "node00" not in after
+
+
+def test_rewrite_does_not_treat_later_paths_as_vasp_executable() -> None:
+    before = (
+        "#!/bin/bash\n"
+        "mpirun -np 2 hostname > vasp_hosts.txt\n"
+        "echo /data/vasp_std/reference\n"
+        "# mpirun -np 2 vasp_std > ignored.log\n"
+    )
+
+    after = rewrite_slurm_resources(before, _profile())
+
+    assert "mpirun -np 2 hostname > vasp_hosts.txt" in after
+    assert "echo /data/vasp_std/reference" in after
+    assert "# mpirun -np 2 vasp_std > ignored.log" in after
+    assert after.count(
+        "mpirun -np ${SLURM_NTASKS:-96} vasp_std > vasp.log 2>&1"
+    ) == 1
 
 
 @pytest.mark.parametrize(
@@ -297,6 +346,7 @@ def test_slurm_script_diff_is_stable_and_empty_for_identical_text() -> None:
     after = "#!/bin/bash\nfalse\n"
 
     assert slurm_script_diff(before, before) == ""
+    assert slurm_script_diff("", "") == ""
     assert slurm_script_diff(before, after) == (
         "--- a/vasp.slurm\n"
         "+++ b/vasp.slurm\n"
@@ -305,6 +355,31 @@ def test_slurm_script_diff_is_stable_and_empty_for_identical_text() -> None:
         "-true\n"
         "+false\n"
     )
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "expected_change"),
+    [
+        (
+            "x",
+            "x\n",
+            "-x\n\\ No newline at end of file\n+x\n",
+        ),
+        (
+            "x\n",
+            "x",
+            "-x\n+x\n\\ No newline at end of file\n",
+        ),
+    ],
+)
+def test_slurm_script_diff_represents_final_newline_changes(
+    before: str, after: str, expected_change: str
+) -> None:
+    diff = slurm_script_diff(before, after)
+
+    assert "@@ -1 +1 @@\n" in diff
+    assert expected_change in diff
+    assert slurm_script_diff(before, before) == ""
 
 
 def test_portable_slurm_template_has_no_site_specific_values() -> None:

@@ -43,6 +43,19 @@ _RESOURCE_OPTIONS = {
     "time": ("-t", "--time"),
     "nodelist": ("-w", "--nodelist"),
 }
+_VASP_EXECUTABLES = {"vasp", "vasp_std", "vasp_gam", "vasp_ncl"}
+_LAUNCH_OPTIONS_WITHOUT_VALUES = {
+    "--allow-run-as-root",
+    "--display-map",
+    "--exclusive",
+    "--oversubscribe",
+    "--report-bindings",
+    "--tag-output",
+    "--timestamp-output",
+    "--verbose",
+    "-v",
+}
+_LAUNCH_OPTIONS_WITH_TWO_VALUES = {"--mca", "-mca"}
 
 
 def _is_positive_int(value: object) -> bool:
@@ -219,29 +232,12 @@ def _parse_directive_tokens(text: str) -> list[tuple[str, str]]:
     parsed = []
     index = 0
     while index < len(tokens):
-        token = tokens[index]
-        option = token
-        value: Optional[str] = None
-        if "=" in token:
-            option, value = token.split("=", 1)
-        elif token not in _DIRECTIVES:
-            for short in _SHORT_DIRECTIVES:
-                if token.startswith(short) and len(token) > len(short):
-                    option, value = short, token[len(short) :]
-                    break
-        key = _DIRECTIVES.get(option)
-        if key is None:
+        directive = _recognized_directive_at(tokens, index)
+        if directive is None:
             index += 1
             continue
-        if value is None:
-            index += 1
-            if index >= len(tokens):
-                raise ValueError(f"SLURM {key} directive requires a value")
-            value = tokens[index]
-        if not value:
-            raise ValueError(f"SLURM {key} directive requires a value")
+        key, value, index = directive
         parsed.append((key, value))
-        index += 1
     return parsed
 
 
@@ -319,20 +315,9 @@ def rewrite_slurm_resources(script_text: str, profile: SlurmProfile) -> str:
     seen = set()
     rewritten = []
     for line in lines:
-        matched_key, comment = _resource_directive(line)
-        if matched_key == "nodelist":
-            if comment:
-                rewritten.append(comment)
-            continue
-        if matched_key in replacements:
-            if matched_key not in seen:
-                suffix = f" {comment}" if comment else ""
-                rewritten.append(replacements[matched_key] + suffix)
-                seen.add(matched_key)
-            elif comment:
-                rewritten.append(comment)
-            continue
-        rewritten.append(line)
+        rewritten_line = _rewrite_sbatch_line(line, replacements, seen)
+        if rewritten_line is not None:
+            rewritten.append(rewritten_line)
 
     missing = [
         replacements[key]
@@ -358,18 +343,94 @@ def rewrite_slurm_resources(script_text: str, profile: SlurmProfile) -> str:
     return result.replace("\n", newline)
 
 
-def _resource_directive(line: str) -> tuple[Optional[str], str]:
-    for key, options in _RESOURCE_OPTIONS.items():
-        option_pattern = "|".join(re.escape(option) for option in options)
-        match = re.match(
-            rf"^\s*#SBATCH\s+(?:{option_pattern})(?:\s*=\s*|\s+)\S+"
-            rf"(?P<suffix>\s*(?:#.*)?)$",
-            line,
-        )
-        if match is not None:
-            suffix = match.group("suffix").strip()
-            return key, suffix if suffix.startswith("#") else ""
-    return None, ""
+def _rewrite_sbatch_line(
+    line: str,
+    replacements: Dict[str, str],
+    seen: set[str],
+) -> Optional[str]:
+    match = re.match(r"^(?P<indent>\s*)#SBATCH(?:\s+)(?P<body>.*)$", line)
+    if match is None:
+        return line
+    body, comment = _split_shell_comment(match.group("body"))
+    try:
+        tokens = shlex.split(body, comments=False, posix=True)
+    except ValueError as exc:
+        raise ValueError("invalid SBATCH directive syntax") from exc
+
+    rewritten = []
+    changed = False
+    index = 0
+    while index < len(tokens):
+        parsed = _recognized_directive_at(tokens, index)
+        if parsed is None:
+            rewritten.append(tokens[index])
+            index += 1
+            continue
+        key, _value, next_index = parsed
+        if key not in _RESOURCE_OPTIONS:
+            rewritten.extend(tokens[index:next_index])
+        elif key != "nodelist" and key not in seen:
+            rewritten.append(replacements[key].removeprefix("#SBATCH "))
+            seen.add(key)
+            changed = True
+        else:
+            changed = True
+        index = next_index
+
+    if not changed:
+        return line
+    if not rewritten:
+        return comment or None
+    directive = f"{match.group('indent')}#SBATCH {shlex.join(rewritten)}"
+    return f"{directive} {comment}" if comment else directive
+
+
+def _split_shell_comment(text: str) -> tuple[str, str]:
+    quote = ""
+    escaped = False
+    for index, character in enumerate(text):
+        if escaped:
+            escaped = False
+            continue
+        if character == "\\" and quote != "'":
+            escaped = True
+            continue
+        if quote:
+            if character == quote:
+                quote = ""
+            continue
+        if character in {"'", '"'}:
+            quote = character
+        elif character == "#":
+            return text[:index].rstrip(), text[index:].strip()
+    return text.rstrip(), ""
+
+
+def _recognized_directive_at(
+    tokens: list[str], index: int
+) -> Optional[tuple[str, str, int]]:
+    token = tokens[index]
+    option = token
+    value: Optional[str] = None
+    if "=" in token:
+        option, value = token.split("=", 1)
+    elif token not in _DIRECTIVES:
+        for short in _SHORT_DIRECTIVES:
+            if token.startswith(short) and len(token) > len(short):
+                option, value = short, token[len(short) :]
+                break
+    key = _DIRECTIVES.get(option)
+    if key is None:
+        return None
+    next_index = index + 1
+    if value is None:
+        if next_index >= len(tokens):
+            raise ValueError(f"SLURM {key} directive requires a value")
+        value = tokens[next_index]
+        next_index += 1
+    if not value:
+        raise ValueError(f"SLURM {key} directive requires a value")
+    return key, value, next_index
 
 
 def _directive_insertion_index(lines: list[str]) -> int:
@@ -388,15 +449,35 @@ def _is_vasp_launch(line: str) -> bool:
     if not stripped or stripped.startswith("#"):
         return False
     try:
-        tokens = shlex.split(stripped, comments=True, posix=True)
+        lexer = shlex.shlex(stripped, posix=True, punctuation_chars="|&;<>")
+        lexer.whitespace_split = True
+        lexer.commenters = "#"
+        tokens = list(lexer)
     except ValueError:
         return False
     if not tokens or PurePath(tokens[0]).name not in {"mpirun", "mpiexec", "srun"}:
         return False
-    return any(
-        PurePath(token).name == "vasp" or PurePath(token).name.startswith("vasp_")
-        for token in tokens[1:]
-    )
+    executable = _launcher_executable(tokens)
+    return executable is not None and PurePath(executable).name in _VASP_EXECUTABLES
+
+
+def _launcher_executable(tokens: list[str]) -> Optional[str]:
+    index = 1
+    while index < len(tokens):
+        token = tokens[index]
+        if token and token[0] in "|&;<>":
+            return None
+        if token == "--":
+            index += 1
+            return tokens[index] if index < len(tokens) else None
+        if not token.startswith("-"):
+            return token
+        if "=" in token or token in _LAUNCH_OPTIONS_WITHOUT_VALUES:
+            index += 1
+            continue
+        value_count = 2 if token in _LAUNCH_OPTIONS_WITH_TWO_VALUES else 1
+        index += value_count + 1
+    return None
 
 
 def slurm_script_diff(
@@ -408,10 +489,18 @@ def slurm_script_diff(
     if before == after:
         return ""
     lines = difflib.unified_diff(
-        before.splitlines(),
-        after.splitlines(),
+        before.splitlines(keepends=True),
+        after.splitlines(keepends=True),
         fromfile=f"a/{script_name}",
         tofile=f"b/{script_name}",
-        lineterm="",
+        lineterm="\n",
     )
-    return "\n".join(lines) + "\n"
+    rendered = []
+    for line in lines:
+        if line.endswith(("\n", "\r")):
+            rendered.append(line)
+            continue
+        rendered.append(line + "\n")
+        if line.startswith((" ", "+", "-")):
+            rendered.append("\\ No newline at end of file\n")
+    return "".join(rendered)
