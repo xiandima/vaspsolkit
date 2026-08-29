@@ -143,7 +143,7 @@ def test_configure_reference_explicitly_updates_only_reference_fields(tmp_path) 
     assert config.workflow.she_reference == 4.44
     assert config.workflow.she_reference_source == "DOI:example"
     assert config.workflow.she_reference_confirmed is True
-    assert config.scheduler.cores == 48
+    assert config.scheduler.tasks == 96
 
 
 def test_reference_freshness_distinguishes_missing_current_stale_and_unknown(tmp_path) -> None:

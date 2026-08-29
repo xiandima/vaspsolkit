@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import difflib
 import json
 import subprocess
 import sys
@@ -16,6 +17,7 @@ from .config import (
     SchedulerConfig,
     WorkflowConfig,
     load_kit_config,
+    migrate_config_data,
     write_kit_config,
 )
 from .convergence import DiagnosticResult, apply_repair, propose_repair
@@ -88,8 +90,26 @@ def main(
     if args.command == "configure-reference":
         return _cmd_configure_reference(args, input_fn, output)
     if args.command == "migrate":
-        config = load_kit_config(Path(args.input))
-        write_kit_config(Path(args.output), config)
+        source = Path(args.input)
+        target = Path(args.output)
+        current = json.loads(source.read_text(encoding="utf-8"))
+        migrated = migrate_config_data(current)
+        before = json.dumps(current, indent=2, sort_keys=True).splitlines()
+        after = json.dumps(migrated, indent=2, sort_keys=True).splitlines()
+        preview = "\n".join(
+            difflib.unified_diff(
+                before,
+                after,
+                fromfile=str(source),
+                tofile=str(target),
+                lineterm="",
+            )
+        )
+        output(preview or "\n".join(after))
+        if not args.yes and not _confirm("Write migrated config?", input_fn):
+            output("migration cancelled")
+            return 1
+        write_kit_config(target, KitConfig.from_dict(migrated))
         output(f"wrote {args.output}")
         return 0
     if args.command == "reaction":
@@ -249,7 +269,7 @@ def _build_parser() -> argparse.ArgumentParser:
     init.add_argument("--workdir", default=".")
     init.add_argument("--config", default=None)
     init.add_argument("--profile", choices=sorted(PROFILE_TAGS), default=None)
-    init.add_argument("--scheduler", choices=["pbs", "slurm", "custom"], default=None)
+    init.add_argument("--scheduler", choices=["slurm", "custom"], default=None)
     init.add_argument("--script", default=None)
     init.add_argument("--set", action="append", default=[], metavar="TAG=VALUE")
     init.add_argument("--she-reference", type=float, default=None)
@@ -263,9 +283,10 @@ def _build_parser() -> argparse.ArgumentParser:
     reference.add_argument("--she-reference-source", default=None)
     reference.add_argument("--yes", action="store_true")
 
-    migrate = sub.add_parser("migrate", help="migrate a flat vaspsolflow configuration")
+    migrate = sub.add_parser("migrate", help="migrate a v1 SLURM configuration")
     migrate.add_argument("--input", required=True)
     migrate.add_argument("--output", default="vaspsolkit.json")
+    migrate.add_argument("--yes", action="store_true")
 
     for name, help_text in (
         ("menu", "open the fixed-number interactive menu"),
@@ -381,8 +402,8 @@ def _cmd_init(args, input_fn: InputFn, output: OutputFn) -> int:
     )
     output(f"SHE reference：{reference.value:.6g} eV")
     output(f"参考来源：{reference.source or '未填写'}")
-    scheduler_kind = args.scheduler or _choose("Scheduler", ["pbs", "slurm", "custom"], input_fn, output)
-    default_script = {"pbs": "vasp.pbs", "slurm": "vasp.slurm", "custom": "submit.sh"}[scheduler_kind]
+    scheduler_kind = args.scheduler or _choose("Scheduler", ["slurm", "custom"], input_fn, output)
+    default_script = {"slurm": "vasp.slurm", "custom": "submit.sh"}[scheduler_kind]
     script = args.script or input_fn(f"Submission script [{default_script}]: ").strip() or default_script
     _ensure_standard_inputs(workdir, args.yes, input_fn, output)
     script_path = workdir / script
@@ -438,7 +459,6 @@ def _cmd_init(args, input_fn: InputFn, output: OutputFn) -> int:
         if not _confirm("Write INCAR, vaspsolkit.json, and state file?", input_fn):
             output("initialization cancelled")
             return 1
-    workflow.pbs_file = script
     scheduler = SchedulerConfig(kind=scheduler_kind, script=script)
     if scheduler_kind == "custom":
         submit = input_fn("Custom submit command tokens (use {script}): ").strip() if not args.yes else ""

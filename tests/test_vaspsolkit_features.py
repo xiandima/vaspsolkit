@@ -42,7 +42,7 @@ class VaspsolkitConfigAndStateTests(unittest.TestCase):
 
         self.assertEqual(loaded.neutral.metadata["stage"], "neutral_relax")
         self.assertEqual(loaded.neutral.metadata["source_poscar_sha256"], "abc")
-    def test_legacy_config_migrates_to_versioned_kit_config(self):
+    def test_flat_pbs_shaped_config_requires_slurm_profile_selection(self):
         from vaspsolkit.config import load_kit_config
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -59,13 +59,8 @@ class VaspsolkitConfigAndStateTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            config = load_kit_config(path)
-
-        self.assertEqual(config.config_version, 1)
-        self.assertEqual(config.scheduler.kind, "pbs")
-        self.assertEqual(config.scheduler.queue, "normal")
-        self.assertEqual(config.scheduler.cores, 48)
-        self.assertEqual(config.workflow.nelect_offsets, [-1.0, -0.5, 0.0, 0.5, 1.0])
+            with self.assertRaisesRegex(ValueError, "select a SLURM profile"):
+                load_kit_config(path)
 
     def test_charge_sweep_requires_exactly_one_neutral_point(self):
         from vaspsolkit.config import WorkflowConfig
@@ -1373,17 +1368,26 @@ class VaspsolkitCliTests(unittest.TestCase):
             legacy = root / "vaspsolflow.json"
             target = root / "vaspsolkit.json"
             legacy.write_text(
-                json.dumps({"folders": ["1", "2", "3"], "nelect_offsets": [-1, 0, 1]}),
+                json.dumps(
+                    {
+                        "config_version": 1,
+                        "workflow": {"folders": ["1", "2", "3"], "nelect_offsets": [-1, 0, 1]},
+                        "scheduler": {"kind": "slurm", "queue": "compute", "cores": 48},
+                    }
+                ),
                 encoding="utf-8",
             )
 
-            result = main(["migrate", "--input", str(legacy), "--output", str(target)])
+            result = main(
+                ["migrate", "--input", str(legacy), "--output", str(target), "--yes"]
+            )
 
             migrated = json.loads(target.read_text(encoding="utf-8"))
             self.assertEqual(result, 0)
-            self.assertEqual(migrated["config_version"], 1)
+            self.assertEqual(migrated["config_version"], 2)
             self.assertIn("workflow", migrated)
             self.assertIn("scheduler", migrated)
+            self.assertEqual(migrated["scheduler"]["partition"], "compute")
 
     def test_noninteractive_init_applies_profile_and_writes_state(self):
         from vaspsolkit.cli import main

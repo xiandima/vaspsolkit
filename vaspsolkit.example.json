@@ -1,5 +1,5 @@
 {
-  "config_version": 1,
+  "config_version": 2,
   "profile": "vaspsol-neutral-relax",
   "workflow": {
     "job_root": "charge_sweep",
@@ -16,12 +16,24 @@
     "target_potentials": [0.0, 0.4]
   },
   "scheduler": {
-    "kind": "pbs",
-    "queue": "",
-    "cores": 48,
-    "memory": "",
-    "walltime": "48:00:00",
+    "kind": "slurm",
+    "partition": "compute",
     "nodes": [],
-    "script": "vasp.pbs"
+    "node_count": 1,
+    "tasks": 96,
+    "tasks_per_node": 96,
+    "memory": "",
+    "walltime": "72:00:00",
+    "max_inflight": null,
+    "script": "vasp.slurm",
+    "launcher": "mpirun",
+    "executable": "vasp_std",
+    "module_init": "",
+    "modules": [],
+    "submit_command": [],
+    "inspect_command": [],
+    "status_command": [],
+    "cancel_command": [],
+    "job_id_pattern": "(?P<job_id>\\S+)"
   }
 }

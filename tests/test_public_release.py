@@ -33,14 +33,16 @@ def test_configured_pbs_module_has_no_site_specific_init_script() -> None:
     assert "/opt/" + "modules" not in text
 
 
-def test_default_configuration_has_no_site_specific_queue_or_node_floor() -> None:
+def test_default_configuration_uses_slurm_local_server_profile() -> None:
     from vaspsolkit.config import KitConfig
 
     config = KitConfig()
 
-    assert config.scheduler.queue == ""
-    assert config.workflow.qsub_queue == ""
-    assert config.workflow.qsub_min_node == 0
+    assert config.scheduler.kind == "slurm"
+    assert config.scheduler.partition == "compute"
+    assert config.scheduler.nodes == []
+    assert config.scheduler.module_init == ""
+    assert config.scheduler.modules == []
 
 
 def test_readme_documents_numbered_menu_and_confirmation_contract() -> None:

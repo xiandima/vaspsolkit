@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -12,12 +13,11 @@ from .reference_settings import validate_she_reference
 
 DEFAULT_FOLDERS = ["1", "2", "3", "4", "5"]
 DEFAULT_OFFSETS = [-1.0, -0.5, 0.0, 0.5, 1.0]
-DEFAULT_COPY_FILES = ["INCAR", "POTCAR", "KPOINTS", "CHGCAR", "vasp.pbs"]
+DEFAULT_COPY_FILES = ["INCAR", "POTCAR", "KPOINTS", "CHGCAR"]
 
 
 @dataclass
 class WorkflowConfig:
-    pbs_file: str = "vasp.pbs"
     poll_interval: int = 60
     job_root: str = "charge_sweep"
     results_root: str = "results"
@@ -31,10 +31,6 @@ class WorkflowConfig:
     interface_count: int = 1
     target_potentials: List[float] = field(default_factory=list)
     nelect_ref: Optional[float] = None
-    qsub_queue: str = ""
-    qsub_ppn: int = 48
-    qsub_min_node: int = 0
-    qsub_walltime: str = "48:00:00"
     job_state_file: str = ".vaspsolkit_jobs.json"
     summary_file: str = "summary.csv"
     analysis_file: str = "analysis.json"
@@ -67,14 +63,6 @@ class WorkflowConfig:
             kwargs["she_reference_confirmed"] = bool(kwargs["she_reference_confirmed"])
         if "vacuum_level_reference" in kwargs:
             kwargs["vacuum_level_reference"] = str(kwargs["vacuum_level_reference"])
-        if "qsub_queue" in kwargs:
-            kwargs["qsub_queue"] = str(kwargs["qsub_queue"])
-        if "qsub_ppn" in kwargs:
-            kwargs["qsub_ppn"] = int(kwargs["qsub_ppn"])
-        if "qsub_min_node" in kwargs:
-            kwargs["qsub_min_node"] = int(kwargs["qsub_min_node"])
-        if "qsub_walltime" in kwargs:
-            kwargs["qsub_walltime"] = str(kwargs["qsub_walltime"])
         if "neutral_profile" in kwargs:
             kwargs["neutral_profile"] = str(kwargs["neutral_profile"])
         if "charge_profile" in kwargs:
@@ -98,10 +86,6 @@ class WorkflowConfig:
             raise ValueError("interface_count must be positive")
         if self.vacuum_level_reference != "neutral":
             raise ValueError("vacuum_level_reference must be 'neutral'")
-        if self.qsub_ppn <= 0:
-            raise ValueError("qsub_ppn must be positive")
-        if self.qsub_min_node < 0:
-            raise ValueError("qsub_min_node must be non-negative")
         if len(self.folders) != len(self.nelect_offsets):
             raise ValueError("folders and nelect_offsets must have the same length")
         if require_neutral and sum(abs(value) <= 1.0e-12 for value in self.nelect_offsets) != 1:
@@ -110,14 +94,20 @@ class WorkflowConfig:
 
 @dataclass
 class SchedulerConfig:
-    kind: str = "pbs"
-    queue: str = ""
-    cores: int = 48
-    memory: str = ""
-    walltime: str = "48:00:00"
-    max_inflight: Optional[int] = None
-    script: str = "vasp.pbs"
+    kind: str = "slurm"
+    partition: str = "compute"
     nodes: List[str] = field(default_factory=list)
+    node_count: int = 1
+    tasks: int = 96
+    tasks_per_node: int = 96
+    memory: str = ""
+    walltime: str = "72:00:00"
+    max_inflight: Optional[int] = None
+    script: str = "vasp.slurm"
+    launcher: str = "mpirun"
+    executable: str = "vasp_std"
+    module_init: str = ""
+    modules: List[str] = field(default_factory=list)
     submit_command: List[str] = field(default_factory=list)
     inspect_command: List[str] = field(default_factory=list)
     status_command: List[str] = field(default_factory=list)
@@ -126,65 +116,70 @@ class SchedulerConfig:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SchedulerConfig":
+        allowed = {field_name for field_name in cls.__dataclass_fields__}
+        unknown = sorted(set(data) - allowed)
+        if unknown:
+            raise ValueError(f"unknown scheduler config field(s): {', '.join(unknown)}")
         values = dict(data)
         for key in ("submit_command", "inspect_command", "status_command", "cancel_command"):
             if key in values:
                 values[key] = [str(item) for item in values[key]]
-        for key in ("cores",):
+        if "modules" in values:
+            values["modules"] = [str(item) for item in values["modules"]]
+        for key in ("node_count", "tasks", "tasks_per_node"):
             if key in values:
                 values[key] = int(values[key])
         if "max_inflight" in values and values["max_inflight"] is not None:
             values["max_inflight"] = int(values["max_inflight"])
         if "nodes" in values:
-            values["nodes"] = [str(item).strip() for item in values["nodes"] if str(item).strip()]
+            values["nodes"] = [str(item).strip() for item in values["nodes"]]
         return cls(**values)
 
     def validate(self) -> None:
-        if self.kind not in {"pbs", "slurm", "custom"}:
-            raise ValueError("scheduler kind must be pbs, slurm, or custom")
-        if self.cores <= 0:
-            raise ValueError("scheduler cores must be positive")
+        if self.kind not in {"slurm", "custom"}:
+            raise ValueError("scheduler kind must be slurm or custom")
+        if self.node_count <= 0:
+            raise ValueError("scheduler node_count must be positive")
+        if self.tasks <= 0:
+            raise ValueError("scheduler tasks must be positive")
+        if self.tasks_per_node <= 0:
+            raise ValueError("scheduler tasks_per_node must be positive")
+        if self.tasks > self.node_count * self.tasks_per_node:
+            raise ValueError("scheduler tasks exceed node capacity")
         if self.max_inflight is not None and self.max_inflight <= 0:
             raise ValueError("scheduler max_inflight must be positive when configured")
-        if len(set(self.nodes)) != len(self.nodes):
-            raise ValueError("scheduler nodes must not contain duplicates")
-        if any(not node.strip() for node in self.nodes):
+        normalized_nodes = [node.strip() for node in self.nodes]
+        if any(not node for node in normalized_nodes):
             raise ValueError("scheduler nodes must be non-empty")
+        if len(set(normalized_nodes)) != len(normalized_nodes):
+            raise ValueError("scheduler nodes must not contain duplicates")
+        if self.nodes and len(self.nodes) != self.node_count:
+            raise ValueError("scheduler explicit nodes must match node_count")
         if self.kind == "custom" and not self.submit_command:
             raise ValueError("custom scheduler requires submit_command")
 
 
 @dataclass
 class KitConfig:
-    config_version: int = 1
+    config_version: int = 2
     profile: str = "vaspsol-sweep"
     workflow: WorkflowConfig = field(default_factory=WorkflowConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "KitConfig":
-        if "workflow" not in data and "scheduler" not in data:
-            workflow = WorkflowConfig.from_dict(data)
-            scheduler = SchedulerConfig(
-                kind="pbs",
-                queue=workflow.qsub_queue,
-                cores=workflow.qsub_ppn,
-                walltime=workflow.qsub_walltime,
-                script=workflow.pbs_file,
-            )
-            return cls(workflow=workflow, scheduler=scheduler)
         unknown = sorted(set(data) - {"config_version", "profile", "workflow", "scheduler"})
         if unknown:
             raise ValueError(f"unknown kit config field(s): {', '.join(unknown)}")
         return cls(
-            config_version=int(data.get("config_version", 1)),
+            config_version=int(data.get("config_version", 2)),
             profile=str(data.get("profile", "vaspsol-sweep")),
             workflow=WorkflowConfig.from_dict(dict(data.get("workflow", {}))),
             scheduler=SchedulerConfig.from_dict(dict(data.get("scheduler", {}))),
         )
 
     def validate(self) -> None:
-        if self.config_version != 1:
+        if self.config_version != 2:
             raise ValueError(f"unsupported config_version: {self.config_version}")
         self.workflow.validate(require_neutral=self.profile == "vaspsol-sweep")
         self.scheduler.validate()
@@ -193,6 +188,97 @@ class KitConfig:
         from dataclasses import asdict
 
         return asdict(self)
+
+
+_PBS_WORKFLOW_FIELDS = {"pbs_file", "qsub_queue", "qsub_ppn", "qsub_min_node", "qsub_walltime"}
+_V1_SCHEDULER_FIELDS = {
+    "kind",
+    "queue",
+    "cores",
+    "partition",
+    "nodes",
+    "node_count",
+    "tasks",
+    "tasks_per_node",
+    "memory",
+    "walltime",
+    "max_inflight",
+    "script",
+    "launcher",
+    "executable",
+    "module_init",
+    "modules",
+    "submit_command",
+    "inspect_command",
+    "status_command",
+    "cancel_command",
+    "job_id_pattern",
+}
+
+
+def migrate_config_data(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a validated config-v2 dictionary without changing ``data``."""
+    if not isinstance(data, dict):
+        raise ValueError("configuration must be a JSON object")
+    source = deepcopy(data)
+    try:
+        version = int(source.get("config_version", 1))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("config_version must be an integer") from exc
+
+    if version == 2:
+        config = KitConfig.from_dict(source)
+        config.validate()
+        return config.to_dict()
+    if version != 1:
+        raise ValueError(f"unsupported config_version: {version}")
+    if "workflow" not in source or "scheduler" not in source:
+        raise ValueError("legacy PBS configuration cannot be migrated; select a SLURM profile")
+
+    unknown = sorted(set(source) - {"config_version", "profile", "workflow", "scheduler"})
+    if unknown:
+        raise ValueError(f"unknown kit config field(s): {', '.join(unknown)}")
+    workflow_v1 = dict(source.get("workflow") or {})
+    scheduler_v1 = dict(source.get("scheduler") or {})
+    kind = str(scheduler_v1.get("kind", "pbs"))
+    if kind == "pbs":
+        raise ValueError("PBS configuration cannot be migrated; select a SLURM profile")
+
+    unknown_scheduler = sorted(set(scheduler_v1) - _V1_SCHEDULER_FIELDS)
+    if unknown_scheduler:
+        raise ValueError(f"unknown scheduler config field(s): {', '.join(unknown_scheduler)}")
+
+    workflow = {key: value for key, value in workflow_v1.items() if key not in _PBS_WORKFLOW_FIELDS}
+    nodes = list(scheduler_v1.get("nodes", []))
+    cores = scheduler_v1.get("cores", workflow_v1.get("qsub_ppn", 96))
+    scheduler = {
+        key: deepcopy(value)
+        for key, value in scheduler_v1.items()
+        if key in SchedulerConfig.__dataclass_fields__
+    }
+    scheduler.update(
+        {
+            "kind": kind,
+            "partition": scheduler_v1.get("partition", scheduler_v1.get("queue", "compute")),
+            "nodes": nodes,
+            "node_count": scheduler_v1.get("node_count", len(nodes) if nodes else 1),
+            "tasks": scheduler_v1.get("tasks", cores),
+            "tasks_per_node": scheduler_v1.get("tasks_per_node", cores),
+        }
+    )
+    if "walltime" not in scheduler_v1 and "qsub_walltime" in workflow_v1:
+        scheduler["walltime"] = workflow_v1["qsub_walltime"]
+
+    migrated = {
+        "config_version": 2,
+        "profile": str(source.get("profile", "vaspsol-sweep")),
+        "workflow": workflow,
+        "scheduler": scheduler,
+    }
+    config = KitConfig.from_dict(migrated)
+    config.validate()
+    return config.to_dict()
+
 
 def load_config(path: Optional[str]) -> WorkflowConfig:
     config = WorkflowConfig.load(Path(path) if path else None)
@@ -207,7 +293,8 @@ def load_kit_config(path: Optional[Path]) -> KitConfig:
         path = Path(path)
         if not path.exists():
             raise FileNotFoundError(f"config file is missing: {path}")
-        config = KitConfig.from_dict(json.loads(path.read_text(encoding="utf-8")))
+        data = json.loads(path.read_text(encoding="utf-8"))
+        config = KitConfig.from_dict(migrate_config_data(data))
     config.validate()
     return config
 
