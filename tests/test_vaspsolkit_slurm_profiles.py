@@ -309,6 +309,25 @@ def test_rewrite_does_not_treat_later_paths_as_vasp_executable() -> None:
 
 
 @pytest.mark.parametrize(
+    "executable",
+    ["vasp_legacy", "./bin/vasp_legacy", "/opt/site/bin/vasp_legacy"],
+)
+def test_rewrite_recognizes_safe_site_vasp_payload_once(executable: str) -> None:
+    before = (
+        "mpirun -np 2 hostname > vasp_hosts.txt\n"
+        f"mpirun -np 96 {executable} > old.log 2>&1\n"
+    )
+
+    after = rewrite_slurm_resources(before, _profile())
+
+    assert "mpirun -np 2 hostname > vasp_hosts.txt" in after
+    assert executable not in after
+    assert after.count(
+        "mpirun -np ${SLURM_NTASKS:-96} vasp_std > vasp.log 2>&1"
+    ) == 1
+
+
+@pytest.mark.parametrize(
     ("before", "line_ending", "has_final_newline"),
     [
         ("#!/bin/bash\r\n#SBATCH -p old\r\ntrue\r\n", "\r\n", True),

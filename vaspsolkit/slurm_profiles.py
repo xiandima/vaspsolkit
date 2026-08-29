@@ -43,7 +43,8 @@ _RESOURCE_OPTIONS = {
     "time": ("-t", "--time"),
     "nodelist": ("-w", "--nodelist"),
 }
-_VASP_EXECUTABLES = {"vasp", "vasp_std", "vasp_gam", "vasp_ncl"}
+_VASP_EXECUTABLE = re.compile(r"^vasp_[A-Za-z0-9._+-]+$")
+_SAFE_EXECUTABLE_TOKEN = re.compile(r"^/?[A-Za-z0-9._+/-]+$")
 _LAUNCH_OPTIONS_WITHOUT_VALUES = {
     "--allow-run-as-root",
     "--display-map",
@@ -458,7 +459,10 @@ def _is_vasp_launch(line: str) -> bool:
     if not tokens or PurePath(tokens[0]).name not in {"mpirun", "mpiexec", "srun"}:
         return False
     executable = _launcher_executable(tokens)
-    return executable is not None and PurePath(executable).name in _VASP_EXECUTABLES
+    if executable is None or _SAFE_EXECUTABLE_TOKEN.fullmatch(executable) is None:
+        return False
+    basename = PurePath(executable).name
+    return basename == "vasp" or _VASP_EXECUTABLE.fullmatch(basename) is not None
 
 
 def _launcher_executable(tokens: list[str]) -> Optional[str]:
