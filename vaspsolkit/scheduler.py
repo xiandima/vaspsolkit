@@ -18,6 +18,7 @@ class JobState:
     exists: bool
     state: str
     raw: str = ""
+    exit_code: str = ""
 
 
 @dataclass(frozen=True)
@@ -323,10 +324,27 @@ class SlurmScheduler:
     def __init__(self, runner: Optional[Runner] = None):
         self.runner = runner or PBSScheduler._default_runner
 
-    def submit(self, workdir: Path, script: str, dry_run: bool = False, **_: object) -> str:
+    def submit(
+        self, workdir: Path, script: str, dry_run: bool = False,
+        partition: Optional[str] = None, nodes: Sequence[str] = (),
+        node_count: Optional[int] = None, tasks: Optional[int] = None,
+        tasks_per_node: Optional[int] = None, walltime: Optional[str] = None,
+        **_: object,
+    ) -> str:
         if dry_run:
             return f"DRY-RUN:{Path(workdir).name}"
-        result = self.runner(["sbatch", "--parsable", script], Path(workdir))
+        command = ["sbatch", "--parsable"]
+        for option, value in (
+            ("--partition", partition), ("--nodes", node_count),
+            ("--ntasks", tasks), ("--ntasks-per-node", tasks_per_node),
+            ("--time", walltime),
+        ):
+            if value not in (None, ""):
+                command.extend([option, str(value)])
+        if nodes:
+            command.extend(["--nodelist", ",".join(nodes)])
+        command.append(script)
+        result = self.runner(command, Path(workdir))
         if result.returncode != 0:
             raise RuntimeError(f"sbatch failed in {workdir}: {result.stderr.strip()}")
         job_id = result.stdout.strip().split(";", 1)[0]
@@ -342,7 +360,18 @@ class SlurmScheduler:
             return JobState(job_id=job_id, exists=True, state="UNKNOWN", raw=result.stderr)
         state = result.stdout.strip().splitlines()
         if not state:
-            return JobState(job_id=job_id, exists=False, state="MISSING", raw=result.stdout)
+            history = self.runner(
+                ["sacct", "-X", "-n", "-P", "-j", job_id,
+                 "--format=JobIDRaw,State,ExitCode"], None,
+            )
+            if history.returncode != 0:
+                return JobState(job_id, True, "UNKNOWN", history.stderr or history.stdout)
+            for line in history.stdout.splitlines():
+                parts = line.split("|", 2)
+                if len(parts) == 3 and parts[0].strip() == job_id:
+                    canonical = parts[1].strip().upper().split()[0].rstrip("+")
+                    return JobState(job_id, True, canonical, history.stdout, parts[2].strip())
+            return JobState(job_id=job_id, exists=False, state="MISSING", raw=history.stdout)
         return JobState(job_id=job_id, exists=True, state=state[0].strip().upper(), raw=result.stdout)
 
     def inspect(self) -> List[QueueEntry]:
@@ -360,6 +389,53 @@ class SlurmScheduler:
         result = self.runner(["scancel", job_id], None)
         if result.returncode != 0:
             raise RuntimeError(f"scancel failed for {job_id}: {result.stderr.strip()}")
+
+    def inspect_partitions(self) -> List[str]:
+        result = self.runner(["sinfo", "-h", "-o", "%P"], None)
+        if result.returncode != 0:
+            raise RuntimeError(f"sinfo failed: {result.stderr.strip()}")
+        return sorted({line.strip().rstrip("*") for line in result.stdout.splitlines() if line.strip()})
+
+    def inspect_nodes(self, partition: str) -> List["SlurmNodeInfo"]:
+        result = self.runner(
+            ["sinfo", "-N", "-h", "-p", partition, "-o", "%N|%P|%T|%c|%C"], None
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"sinfo failed for partition {partition}: {result.stderr.strip()}")
+        return parse_slurm_nodes(result.stdout, partition)
+
+
+@dataclass(frozen=True)
+class SlurmNodeInfo:
+    name: str
+    partition: str
+    state: str
+    total_cores: int
+    allocated_cores: int
+    idle_cores: int
+    other_cores: int
+
+
+def parse_slurm_nodes(stdout: str, partition: str) -> List[SlurmNodeInfo]:
+    found = {}
+    for line in stdout.splitlines():
+        parts = line.split("|", 4)
+        if len(parts) != 5:
+            continue
+        name, raw_partition, state, total, usage = (part.strip() for part in parts)
+        clean_partition = raw_partition.rstrip("*")
+        if clean_partition != partition:
+            continue
+        try:
+            allocated, idle, other, _ = (int(value) for value in usage.split("/"))
+            total_cores = int(total)
+        except (ValueError, TypeError):
+            continue
+        found[name] = SlurmNodeInfo(
+            name, clean_partition, state.lower().rstrip("*~#"), total_cores,
+            allocated, idle, other,
+        )
+    return [found[name] for name in sorted(found)]
 
 
 class CustomScheduler:
