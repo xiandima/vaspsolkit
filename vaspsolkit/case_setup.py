@@ -142,6 +142,7 @@ class CaseInitializationPlan:
     workdir: Path
     case_fingerprint: CaseDirectoryFingerprint
     config: KitConfig
+    config_before_bytes: Optional[bytes]
     incar_before: str
     incar_after: str
     file_changes: Tuple[PlannedFileChange, ...]
@@ -155,6 +156,10 @@ class CaseInitializationPlan:
         if not isinstance(raw_config, KitConfig):
             raise TypeError("config must be a KitConfig")
         raw_config.validate()
+        if self.config_before_bytes is not None and not isinstance(
+            self.config_before_bytes, bytes
+        ):
+            raise TypeError("config_before_bytes must be bytes or None")
         if not isinstance(self.case_fingerprint, CaseDirectoryFingerprint):
             raise TypeError("case_fingerprint must be CaseDirectoryFingerprint")
         if self.case_fingerprint.path != self.workdir:
@@ -165,6 +170,13 @@ class CaseInitializationPlan:
             raise TypeError("file_changes must be a tuple")
         if any(not isinstance(change, PlannedFileChange) for change in self.file_changes):
             raise TypeError("file_changes must contain PlannedFileChange values")
+        config_changes = tuple(
+            change for change in self.file_changes if change.path.name == CONFIG_FILENAME
+        )
+        if len(config_changes) != 1:
+            raise ValueError("file_changes must contain exactly one config change")
+        if (self.config_before_bytes is None) != (config_changes[0].before is None):
+            raise ValueError("config byte snapshot must match config preview presence")
         for change in self.file_changes:
             try:
                 change.path.relative_to(self.workdir)
@@ -267,6 +279,8 @@ def plan_case_initialization(
         sort_keys=True,
     )
 
+    config_path = _nominal_target_path(case, CONFIG_FILENAME)
+    config_before_bytes = config_path.read_bytes() if config_path.is_file() else None
     target_fingerprints = tuple(
         _fingerprint_target(case, label, _nominal_target_path(case, label))
         for label in ("INCAR", CONFIG_FILENAME, STATE_FILENAME)
@@ -284,7 +298,10 @@ def plan_case_initialization(
         )
     for name, after in ((CONFIG_FILENAME, config_after), (STATE_FILENAME, state_after)):
         path = _nominal_target_path(case, name)
-        before = path.read_text(encoding="utf-8") if path.is_file() else None
+        if name == CONFIG_FILENAME and config_before_bytes is not None:
+            before = _normalized_preview_text(config_before_bytes)
+        else:
+            before = path.read_text(encoding="utf-8") if path.is_file() else None
         changes.append(
             PlannedFileChange(path, before, after, "update" if before is not None else "create")
         )
@@ -292,6 +309,7 @@ def plan_case_initialization(
         case,
         _fingerprint_case_directory(case),
         config,
+        config_before_bytes,
         incar_before,
         update.candidate,
         tuple(changes),
@@ -344,8 +362,8 @@ def _apply_case_initialization_locked(
         failed_path = config_change.path
         expected_config = (
             EXPECT_ABSENT
-            if config_change.before is None
-            else config_change.before.encode("utf-8")
+            if plan.config_before_bytes is None
+            else plan.config_before_bytes
         )
         write_config_bytes(
             config_change.path,
@@ -361,6 +379,10 @@ def _apply_case_initialization_locked(
         _cleanup_staged(staged)
         raise CaseInitializationApplyError("replace", failed_path, exc) from exc
     return tuple(change.path for change in changes)
+
+
+def _normalized_preview_text(data: bytes) -> str:
+    return data.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _resolved_case(workdir: Path) -> Path:

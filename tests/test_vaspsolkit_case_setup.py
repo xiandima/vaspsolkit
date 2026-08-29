@@ -28,6 +28,15 @@ def _scheduler(**overrides):
     return SchedulerConfig(**values)
 
 
+def _slurm_scheduler():
+    from vaspsolkit.config import SchedulerConfig
+
+    scheduler = SchedulerConfig(script="vasp.slurm")
+    scheduler.cores = scheduler.tasks
+    scheduler.queue = scheduler.partition
+    return scheduler
+
+
 def _fingerprint(root: Path) -> tuple[tuple[str, str, int], ...]:
     return tuple(
         (str(path.relative_to(root)), path.read_text(encoding="utf-8"), path.stat().st_mtime_ns)
@@ -214,6 +223,45 @@ def test_apply_preserves_concurrent_config_created_at_write_boundary(tmp_path, m
 
     assert (tmp_path / "vaspsolkit.json").read_bytes() == concurrent_bytes
     assert (tmp_path / "INCAR").read_bytes() == incar_before
+
+
+def test_apply_accepts_unchanged_crlf_config_snapshot(tmp_path):
+    from vaspsolkit.case_setup import apply_case_initialization, plan_case_initialization
+    from vaspsolkit.config import KitConfig, serialize_kit_config
+
+    _write_case(tmp_path)
+    (tmp_path / "vasp.slurm").write_text("#!/bin/sh\n", encoding="utf-8")
+    config_path = tmp_path / "vaspsolkit.json"
+    crlf_bytes = serialize_kit_config(KitConfig()).replace(b"\n", b"\r\n")
+    config_path.write_bytes(crlf_bytes)
+
+    plan = plan_case_initialization(tmp_path, _slurm_scheduler())
+    assert plan.config_before_bytes == crlf_bytes
+    written = apply_case_initialization(plan, confirmed=True)
+
+    assert config_path in written
+    assert json.loads(config_path.read_text(encoding="utf-8"))["config_version"] == 2
+
+
+def test_apply_rejects_changed_crlf_config_and_preserves_changed_bytes(tmp_path):
+    from vaspsolkit.case_setup import apply_case_initialization, plan_case_initialization
+    from vaspsolkit.config import KitConfig, serialize_kit_config
+
+    _write_case(tmp_path)
+    (tmp_path / "vasp.slurm").write_text("#!/bin/sh\n", encoding="utf-8")
+    config_path = tmp_path / "vaspsolkit.json"
+    original = serialize_kit_config(KitConfig()).replace(b"\n", b"\r\n")
+    config_path.write_bytes(original)
+    plan = plan_case_initialization(tmp_path, _slurm_scheduler())
+    changed = KitConfig()
+    changed.scheduler.partition = "concurrent"
+    changed_bytes = serialize_kit_config(changed).replace(b"\n", b"\r\n")
+    config_path.write_bytes(changed_bytes)
+
+    with pytest.raises(RuntimeError, match="stale initialization target"):
+        apply_case_initialization(plan, confirmed=True)
+
+    assert config_path.read_bytes() == changed_bytes
 
 
 @pytest.mark.parametrize(
