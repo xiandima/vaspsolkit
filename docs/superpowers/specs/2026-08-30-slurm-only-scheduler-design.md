@@ -2,7 +2,7 @@
 
 Date: 2026-08-30
 Target release: 0.3.0
-Status: awaiting written-spec review
+Status: approved for implementation
 
 ## Goal
 
