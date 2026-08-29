@@ -6,6 +6,7 @@ from dataclasses import asdict, fields
 
 import pytest
 
+from vaspsolkit import cli as cli_module
 from vaspsolkit import config as config_module
 from vaspsolkit.cli import main
 from vaspsolkit.config import KitConfig, SchedulerConfig, WorkflowConfig
@@ -84,8 +85,8 @@ def test_migrate_v2_returns_validated_normalized_copy_without_mutation() -> None
     data = {
         "config_version": 2,
         "profile": "vaspsol-neutral-relax",
-        "workflow": {"folders": [1], "nelect_offsets": [0]},
-        "scheduler": {"tasks": "24", "tasks_per_node": "24"},
+        "workflow": {"folders": ["1"], "nelect_offsets": [0]},
+        "scheduler": {"tasks": 24, "tasks_per_node": 24},
     }
     original = copy.deepcopy(data)
 
@@ -97,6 +98,91 @@ def test_migrate_v2_returns_validated_normalized_copy_without_mutation() -> None
     assert migrated["scheduler"]["tasks"] == 24
     assert migrated["scheduler"]["partition"] == "compute"
     assert migrated["config_version"] == 2
+
+
+@pytest.mark.parametrize(
+    ("data", "error_path"),
+    [
+        ({"config_version": "2"}, "config_version"),
+        ({"config_version": 2.0}, "config_version"),
+        ({"config_version": 2.9}, "config_version"),
+        ({"config_version": True}, "config_version"),
+        ({"config_version": 3}, "config_version"),
+        ({"config_version": 2, "workflow": []}, "workflow"),
+        ({"config_version": 2, "scheduler": []}, "scheduler"),
+        (
+            {"config_version": 2, "scheduler": {"submit_command": "sbatch"}},
+            "scheduler.submit_command",
+        ),
+        (
+            {"config_version": 2, "scheduler": {"nodes": "node01"}},
+            "scheduler.nodes",
+        ),
+        (
+            {"config_version": 2, "scheduler": {"modules": "vasp/6"}},
+            "scheduler.modules",
+        ),
+        (
+            {"config_version": 2, "scheduler": {"tasks": "96"}},
+            "scheduler.tasks",
+        ),
+        (
+            {"config_version": 2, "scheduler": {"tasks": 96.0}},
+            "scheduler.tasks",
+        ),
+        (
+            {"config_version": 2, "scheduler": {"tasks": True}},
+            "scheduler.tasks",
+        ),
+        (
+            {"config_version": 2, "workflow": {"folders": "1"}},
+            "workflow.folders",
+        ),
+        (
+            {"config_version": 2, "workflow": {"nelect_offsets": "0"}},
+            "workflow.nelect_offsets",
+        ),
+        (
+            {
+                "config_version": 2,
+                "workflow": {"she_reference_confirmed": "false"},
+            },
+            "workflow.she_reference_confirmed",
+        ),
+        (
+            {
+                "config_version": 2,
+                "workflow": {"charge_points_include_neutral": 1},
+            },
+            "workflow.charge_points_include_neutral",
+        ),
+        (
+            {"config_version": 2, "workflow": {"interface_count": 1.0}},
+            "workflow.interface_count",
+        ),
+        (
+            {"config_version": 2, "workflow": {"she_reference": "4.70"}},
+            "workflow.she_reference",
+        ),
+        (
+            {"config_version": 2, "workflow": {"target_potentials": [True]}},
+            "workflow.target_potentials[0]",
+        ),
+        (
+            {
+                "config_version": 1,
+                "workflow": {},
+                "scheduler": {"kind": "slurm", "cores": "96"},
+            },
+            "scheduler.cores",
+        ),
+    ],
+)
+def test_migrate_rejects_coercive_or_malformed_schema_values(data, error_path) -> None:
+    with pytest.raises(ValueError) as error:
+        config_module.migrate_config_data(data)
+
+    assert error_path in str(error.value)
 
 
 def test_migrate_v1_slurm_maps_resources_and_removes_pbs_workflow_keys() -> None:
@@ -242,3 +328,124 @@ def test_migrate_cli_writes_with_yes(tmp_path) -> None:
 
     assert result == 0
     assert json.loads(target.read_text(encoding="utf-8"))["config_version"] == 2
+
+
+def test_migrate_cli_refuses_unrelated_existing_target_without_force(tmp_path) -> None:
+    source = tmp_path / "v1.json"
+    target = tmp_path / "unrelated.json"
+    source.write_text(
+        json.dumps(
+            {
+                "config_version": 1,
+                "workflow": {},
+                "scheduler": {"kind": "slurm"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    original_target = b'{"keep": "exactly these bytes"}\n'
+    target.write_bytes(original_target)
+
+    with pytest.raises(FileExistsError, match="--force"):
+        main(
+            ["migrate", "--input", str(source), "--output", str(target), "--yes"],
+            input_fn=lambda prompt: pytest.fail(f"unexpected prompt: {prompt}"),
+        )
+
+    assert target.read_bytes() == original_target
+
+
+def test_migrate_cli_force_previews_existing_target_and_replaces_it(tmp_path) -> None:
+    source = tmp_path / "v1.json"
+    target = tmp_path / "existing.json"
+    source.write_text(
+        json.dumps(
+            {
+                "config_version": 1,
+                "workflow": {},
+                "scheduler": {"kind": "slurm"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    target.write_text('{"keep": "old destination"}\n', encoding="utf-8")
+    output = []
+
+    result = main(
+        [
+            "migrate",
+            "--input",
+            str(source),
+            "--output",
+            str(target),
+            "--yes",
+            "--force",
+        ],
+        output=output.append,
+    )
+
+    assert result == 0
+    assert '"config_version": 2' in target.read_text(encoding="utf-8")
+    preview = "\n".join(output)
+    assert '-{"keep": "old destination"}' in preview
+    assert f"--- {target}" in preview
+
+
+def test_migrate_cli_supports_in_place_migration(tmp_path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "config_version": 1,
+                "workflow": {},
+                "scheduler": {"kind": "slurm"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = main(
+        ["migrate", "--input", str(path), "--output", str(path), "--yes"],
+    )
+
+    assert result == 0
+    assert json.loads(path.read_text(encoding="utf-8"))["config_version"] == 2
+
+
+def test_migrate_cli_rejects_concurrent_destination_change(tmp_path, monkeypatch) -> None:
+    source = tmp_path / "v1.json"
+    target = tmp_path / "existing.json"
+    source.write_text(
+        json.dumps(
+            {
+                "config_version": 1,
+                "workflow": {},
+                "scheduler": {"kind": "slurm"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    target.write_bytes(b"original destination\n")
+    concurrent_bytes = b"concurrent edit\n"
+    real_write = cli_module.write_kit_config
+
+    def concurrent_write(path, config, **kwargs):
+        path.write_bytes(concurrent_bytes)
+        return real_write(path, config, **kwargs)
+
+    monkeypatch.setattr(cli_module, "write_kit_config", concurrent_write)
+
+    with pytest.raises(RuntimeError, match="changed"):
+        main(
+            [
+                "migrate",
+                "--input",
+                str(source),
+                "--output",
+                str(target),
+                "--yes",
+                "--force",
+            ]
+        )
+
+    assert target.read_bytes() == concurrent_bytes

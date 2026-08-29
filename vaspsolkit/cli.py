@@ -92,15 +92,30 @@ def main(
     if args.command == "migrate":
         source = Path(args.input)
         target = Path(args.output)
-        current = json.loads(source.read_text(encoding="utf-8"))
+        source_bytes = source.read_bytes()
+        same_file = source.resolve() == target.resolve()
+        target_exists = target.exists()
+        if target_exists and not same_file and not args.force:
+            raise FileExistsError(f"output already exists; use --force to replace it: {target}")
+        guarded_write = same_file or args.force
+        target_snapshot = target.read_bytes() if guarded_write and target_exists else None
+
+        current = json.loads(source_bytes.decode("utf-8"))
         migrated = migrate_config_data(current)
-        before = json.dumps(current, indent=2, sort_keys=True).splitlines()
-        after = json.dumps(migrated, indent=2, sort_keys=True).splitlines()
+        migrated_text = json.dumps(migrated, indent=2, sort_keys=True)
+        if args.force and target_exists and not same_file:
+            preview_bytes = target_snapshot
+            preview_path = target
+        else:
+            preview_bytes = source_bytes
+            preview_path = source
+        before = preview_bytes.decode("utf-8", errors="replace").splitlines()
+        after = migrated_text.splitlines()
         preview = "\n".join(
             difflib.unified_diff(
                 before,
                 after,
-                fromfile=str(source),
+                fromfile=str(preview_path),
                 tofile=str(target),
                 lineterm="",
             )
@@ -109,7 +124,11 @@ def main(
         if not args.yes and not _confirm("Write migrated config?", input_fn):
             output("migration cancelled")
             return 1
-        write_kit_config(target, KitConfig.from_dict(migrated))
+        config = KitConfig.from_dict(migrated)
+        if guarded_write:
+            write_kit_config(target, config, expected_current=target_snapshot)
+        else:
+            write_kit_config(target, config)
         output(f"wrote {args.output}")
         return 0
     if args.command == "reaction":
@@ -287,6 +306,7 @@ def _build_parser() -> argparse.ArgumentParser:
     migrate.add_argument("--input", required=True)
     migrate.add_argument("--output", default="vaspsolkit.json")
     migrate.add_argument("--yes", action="store_true")
+    migrate.add_argument("--force", action="store_true")
 
     for name, help_text in (
         ("menu", "open the fixed-number interactive menu"),
