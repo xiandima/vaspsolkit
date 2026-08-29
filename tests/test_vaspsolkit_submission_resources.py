@@ -1,157 +1,42 @@
-from __future__ import annotations
+from vaspsolkit.config import KitConfig
+from vaspsolkit.scheduler import SlurmNodeInfo
+from vaspsolkit.submission_resources import prompt_submission_resources, resource_cli_argv, resources_from_config
 
 
-def test_current_resources_are_rendered_and_returned_unchanged() -> None:
-    from vaspsolkit.config import KitConfig, SchedulerConfig
-    from vaspsolkit.submission_resources import prompt_submission_resources
-
-    config = KitConfig(
-        scheduler=SchedulerConfig(
-            kind="pbs",
-            queue="normal",
-            cores=48,
-            walltime="48:00:00",
-            script="vasp.pbs",
-            nodes=["compute-a.example.org"],
-        )
-    )
-    output = []
-    selected = prompt_submission_resources(
-        config,
-        input_fn=lambda prompt: "1",
-        output=output.append,
-    )
-
-    assert selected.allocation == "specified"
-    assert selected.nodes == ("compute-a.example.org",)
-    assert selected.cores == 48
-    assert selected.persist is False
-    text = "\n".join(output)
-    assert "compute-a.example.org" in text
-    assert "核心数：48" in text
-    assert "队列：normal" in text
-    assert "Walltime：48:00:00" in text
+class Scheduler:
+    def inspect_partitions(self): return ["compute", "long"]
+    def inspect_nodes(self, partition):
+        name = "node11" if partition == "compute" else "zx01"
+        return [SlurmNodeInfo(name, partition, "idle", 96, 0, 96, 0)]
 
 
-def test_auto_allocation_uses_new_cores_and_optional_persistence() -> None:
-    from vaspsolkit.config import KitConfig
-    from vaspsolkit.submission_resources import prompt_submission_resources
-
-    answers = iter(["2", "32", "y"])
-    selected = prompt_submission_resources(
-        KitConfig(),
-        input_fn=lambda prompt: next(answers),
-        output=lambda value: None,
-    )
-
-    assert selected.allocation == "auto"
-    assert selected.nodes == ()
-    assert selected.cores == 32
-    assert selected.persist is True
+def test_default_resources_use_compute_without_node():
+    request = resources_from_config(KitConfig())
+    assert (request.partition, request.allocation, request.nodes) == ("compute", "auto", ())
+    assert request.tasks == request.tasks_per_node == 96
 
 
-def test_specified_node_is_discovered_and_free_cores_are_validated() -> None:
-    from vaspsolkit.config import KitConfig
-    from vaspsolkit.scheduler import PBSNodeInfo
-    from vaspsolkit.submission_resources import prompt_submission_resources
-
-    class Scheduler:
-        def inspect_nodes(self, min_node=0, ppn=48):
-            return [PBSNodeInfo("compute-a.example.org", "free", 48, 0, 48)]
-
-    answers = iter(["3", "compute-a.example.org", "40", "n"])
-    selected = prompt_submission_resources(
-        KitConfig(),
-        input_fn=lambda prompt: next(answers),
-        output=lambda value: None,
-        scheduler_factory=lambda config: Scheduler(),
-    )
-
-    assert selected.nodes == ("compute-a.example.org",)
-    assert selected.cores == 40
-    assert selected.persist is False
+def test_partition_is_selected_before_explicit_node():
+    answers = iter(["3", "compute", "node11", "96", "n"])
+    request = prompt_submission_resources(KitConfig(), input_fn=lambda _: next(answers), output=lambda _: None, scheduler_factory=lambda _: Scheduler())
+    assert request.partition == "compute" and request.nodes == ("node11",) and request.tasks == 96
 
 
-def test_insufficient_free_cores_returns_to_resource_selection() -> None:
-    from vaspsolkit.config import KitConfig
-    from vaspsolkit.scheduler import PBSNodeInfo
-    from vaspsolkit.submission_resources import prompt_submission_resources
-
-    class Scheduler:
-        def inspect_nodes(self, min_node=0, ppn=48):
-            return [PBSNodeInfo("node24", "job-busy", 48, 32, 16)]
-
-    answers = iter(["3", "node24", "32", "0"])
-    output = []
-    selected = prompt_submission_resources(
-        KitConfig(),
-        input_fn=lambda prompt: next(answers),
-        output=output.append,
-        scheduler_factory=lambda config: Scheduler(),
-    )
-
-    assert selected is None
-    assert any("空闲核心数" in line for line in output)
-    assert sum("提交资源配置" in line for line in output) == 2
+def test_node_outside_partition_restarts_then_cancels():
+    answers, output = iter(["3", "compute", "zx01", "0"]), []
+    request = prompt_submission_resources(KitConfig(), input_fn=lambda _: next(answers), output=output.append, scheduler_factory=lambda _: Scheduler())
+    assert request is None and any("不属于分区 compute" in line for line in output)
 
 
-def test_scheduler_failure_returns_to_resource_selection() -> None:
-    from vaspsolkit.config import KitConfig
-    from vaspsolkit.submission_resources import prompt_submission_resources
-
-    class Scheduler:
-        def inspect_nodes(self, min_node=0, ppn=48):
-            raise RuntimeError("pbsnodes unavailable")
-
-    answers = iter(["3", "0"])
-    output = []
-    selected = prompt_submission_resources(
-        KitConfig(),
-        input_fn=lambda prompt: next(answers),
-        output=output.append,
-        scheduler_factory=lambda config: Scheduler(),
-    )
-
-    assert selected is None
-    assert any("pbsnodes unavailable" in line for line in output)
+def test_insufficient_idle_cores_restarts():
+    class Busy(Scheduler):
+        def inspect_nodes(self, partition): return [SlurmNodeInfo("node11", partition, "mixed", 96, 80, 16, 0)]
+    answers, output = iter(["3", "compute", "node11", "32", "0"]), []
+    request = prompt_submission_resources(KitConfig(), input_fn=lambda _: next(answers), output=output.append, scheduler_factory=lambda _: Busy())
+    assert request is None and any("空闲核心数 16" in line for line in output)
 
 
-def test_resource_prompt_zero_cancels_without_scheduler_access() -> None:
-    from vaspsolkit.config import KitConfig
-    from vaspsolkit.submission_resources import prompt_submission_resources
-
-    selected = prompt_submission_resources(
-        KitConfig(),
-        input_fn=lambda prompt: "0",
-        output=lambda value: None,
-        scheduler_factory=lambda config: (_ for _ in ()).throw(
-            AssertionError("scheduler must not be created")
-        ),
-    )
-
-    assert selected is None
-
-
-def test_resource_request_serializes_to_explicit_cli_flags() -> None:
-    from vaspsolkit.operations.actions import ResourceRequest
-    from vaspsolkit.submission_resources import resource_cli_argv
-
-    request = ResourceRequest.create(
-        allocation="specified",
-        nodes=("node24",),
-        cores=40,
-        queue="normal",
-        walltime="48:00:00",
-        script="vasp.pbs",
-        persist=True,
-    )
-
-    assert resource_cli_argv(request) == [
-        "--resource-allocation",
-        "specified",
-        "--resource-node",
-        "node24",
-        "--resource-cores",
-        "40",
-        "--save-resources",
-    ]
+def test_resource_cli_argv_uses_slurm_names():
+    answers = iter(["3", "compute", "node11", "48", "y"])
+    request = prompt_submission_resources(KitConfig(), input_fn=lambda _: next(answers), output=lambda _: None, scheduler_factory=lambda _: Scheduler())
+    assert resource_cli_argv(request) == ["--resource-allocation", "specified", "--resource-partition", "compute", "--resource-node", "node11", "--resource-node-count", "1", "--resource-tasks", "48", "--resource-tasks-per-node", "48", "--save-resources"]

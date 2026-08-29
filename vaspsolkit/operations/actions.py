@@ -38,9 +38,11 @@ _NODE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 @dataclass(frozen=True)
 class ResourceRequest:
     allocation: str
+    partition: str
     nodes: Tuple[str, ...]
-    cores: int
-    queue: str
+    node_count: int
+    tasks: int
+    tasks_per_node: int
     walltime: str
     script: str
     persist: bool = False
@@ -50,18 +52,19 @@ class ResourceRequest:
         cls,
         *,
         allocation: str,
+        partition: str,
         nodes: Tuple[str, ...],
-        cores: int,
-        queue: str,
+        node_count: int,
+        tasks: int,
+        tasks_per_node: int,
         walltime: str,
         script: str,
         persist: bool = False,
     ) -> "ResourceRequest":
         return cls(
             allocation=allocation,
-            nodes=nodes,
-            cores=cores,
-            queue=queue,
+            partition=partition, nodes=nodes, node_count=node_count,
+            tasks=tasks, tasks_per_node=tasks_per_node,
             walltime=walltime,
             script=script,
             persist=persist,
@@ -78,7 +81,7 @@ class ResourceRequest:
                 normalized_nodes.append(normalized)
         object.__setattr__(self, "allocation", self.allocation.strip())
         object.__setattr__(self, "nodes", tuple(normalized_nodes))
-        object.__setattr__(self, "queue", self.queue.strip())
+        object.__setattr__(self, "partition", self.partition.strip())
         object.__setattr__(self, "walltime", self.walltime.strip())
         object.__setattr__(self, "script", self.script.strip())
         self.validate()
@@ -89,14 +92,18 @@ class ResourceRequest:
             raise ValueError("allocation must be 'auto' or 'specified'")
         if self.allocation == "specified" and not self.nodes:
             raise ValueError("specified allocation requires nodes")
-        if len(self.nodes) > 1:
-            raise ValueError("this version supports only one specified node")
+        if self.nodes and len(self.nodes) != self.node_count:
+            raise ValueError("explicit nodes must match node_count")
         if self.allocation == "auto" and self.nodes:
             raise ValueError("auto allocation must not specify nodes")
         if any(_NODE_NAME.fullmatch(node) is None for node in self.nodes):
             raise ValueError("node names may contain only letters, digits, dot, underscore, and hyphen")
-        if self.cores <= 0:
-            raise ValueError("cores must be a positive integer")
+        if not self.partition:
+            raise ValueError("partition must be non-empty")
+        if min(self.node_count, self.tasks, self.tasks_per_node) <= 0:
+            raise ValueError("node and task counts must be positive")
+        if self.tasks > self.node_count * self.tasks_per_node:
+            raise ValueError("tasks exceed requested node capacity")
         if not self.script:
             raise ValueError("script must be non-empty")
         script_path = Path(self.script)
@@ -113,10 +120,12 @@ class ResourceRequest:
             raise TypeError("nodes must be a tuple")
         if any(not isinstance(node, str) for node in self.nodes):
             raise TypeError("nodes must contain strings")
-        if isinstance(self.cores, bool) or not isinstance(self.cores, int):
-            raise TypeError("cores must be an integer")
-        if not isinstance(self.queue, str):
-            raise TypeError("queue must be a string")
+        if not isinstance(self.partition, str):
+            raise TypeError("partition must be a string")
+        for name in ("node_count", "tasks", "tasks_per_node"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError(f"{name} must be an integer")
         if not isinstance(self.walltime, str):
             raise TypeError("walltime must be a string")
         if not isinstance(self.script, str):
