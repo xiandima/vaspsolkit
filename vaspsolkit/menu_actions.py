@@ -23,7 +23,7 @@ MENU_ACTIONS: Tuple[MenuAction, ...] = (
     MenuAction("11", "初始化 Case 配置", "init", "file-changing", "inputs"),
     MenuAction(
         "12",
-        "设置调度器、队列、节点和核心数",
+        "设置调度器、分区、节点和任务数",
         "configure-scheduler",
         "file-changing",
         "inputs",

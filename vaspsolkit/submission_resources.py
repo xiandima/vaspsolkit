@@ -110,7 +110,7 @@ def prompt_submission_resources(
         _render_current(config, output)
         output("")
         output("1. 使用以上配置")
-        output("2. 自动分配节点，重新设置核心数")
+        output("2. 自动分配节点，重新设置任务数")
         if config.scheduler.kind == "slurm":
             output("3. 先选分区，再指定节点")
         output("0. 取消提交")
