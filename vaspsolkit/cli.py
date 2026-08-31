@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import difflib
 import json
 import subprocess
 import sys
@@ -12,10 +13,13 @@ from typing import Callable, List, Optional, Sequence
 from .analysis import analyze_adsorption, analyze_rows, read_summary, write_analysis
 from .case_setup import apply_case_initialization, plan_case_initialization
 from .config import (
+    EXPECT_ABSENT,
     KitConfig,
     SchedulerConfig,
     WorkflowConfig,
     load_kit_config,
+    migrate_config_data,
+    serialize_kit_config,
     write_kit_config,
 )
 from .convergence import DiagnosticResult, apply_repair, propose_repair
@@ -49,7 +53,7 @@ from .postprocess import postprocess_summary
 from .operations.actions import ResourceRequest
 from .reaction import run_reaction_spec
 from .reference_settings import inspect_reference_freshness, prompt_reference_settings
-from .scheduler import PBSScheduler, QueueEntry, scheduler_from_config
+from .scheduler import QueueEntry, SlurmScheduler, scheduler_from_config
 from .state import JobRecord, WorkflowState
 from .submission_resources import resources_from_config
 from .workflow import (
@@ -88,8 +92,42 @@ def main(
     if args.command == "configure-reference":
         return _cmd_configure_reference(args, input_fn, output)
     if args.command == "migrate":
-        config = load_kit_config(Path(args.input))
-        write_kit_config(Path(args.output), config)
+        source = Path(args.input)
+        target = Path(args.output)
+        source_bytes = source.read_bytes()
+        same_file = source.resolve() == target.resolve()
+        target_exists = target.exists()
+        if target_exists and not same_file and not args.force:
+            raise FileExistsError(f"output already exists; use --force to replace it: {target}")
+        target_snapshot = target.read_bytes() if target_exists else None
+
+        current = json.loads(source_bytes.decode("utf-8"))
+        migrated = migrate_config_data(current)
+        config = KitConfig.from_dict(migrated)
+        migrated_text = serialize_kit_config(config).decode("utf-8")
+        if args.force and target_exists and not same_file:
+            preview_bytes = target_snapshot
+            preview_path = target
+        else:
+            preview_bytes = source_bytes
+            preview_path = source
+        before = preview_bytes.decode("utf-8", errors="replace").splitlines()
+        after = migrated_text.splitlines()
+        preview = "\n".join(
+            difflib.unified_diff(
+                before,
+                after,
+                fromfile=str(preview_path),
+                tofile=str(target),
+                lineterm="",
+            )
+        )
+        output(preview or "\n".join(after))
+        if not args.yes and not _confirm("Write migrated config?", input_fn):
+            output("migration cancelled")
+            return 1
+        expected_current = target_snapshot if target_exists else EXPECT_ABSENT
+        write_kit_config(target, config, expected_current=expected_current)
         output(f"wrote {args.output}")
         return 0
     if args.command == "reaction":
@@ -249,7 +287,7 @@ def _build_parser() -> argparse.ArgumentParser:
     init.add_argument("--workdir", default=".")
     init.add_argument("--config", default=None)
     init.add_argument("--profile", choices=sorted(PROFILE_TAGS), default=None)
-    init.add_argument("--scheduler", choices=["pbs", "slurm", "custom"], default=None)
+    init.add_argument("--scheduler", choices=["slurm", "custom"], default=None)
     init.add_argument("--script", default=None)
     init.add_argument("--set", action="append", default=[], metavar="TAG=VALUE")
     init.add_argument("--she-reference", type=float, default=None)
@@ -263,9 +301,11 @@ def _build_parser() -> argparse.ArgumentParser:
     reference.add_argument("--she-reference-source", default=None)
     reference.add_argument("--yes", action="store_true")
 
-    migrate = sub.add_parser("migrate", help="migrate a flat vaspsolflow configuration")
+    migrate = sub.add_parser("migrate", help="migrate a v1 SLURM configuration")
     migrate.add_argument("--input", required=True)
     migrate.add_argument("--output", default="vaspsolkit.json")
+    migrate.add_argument("--yes", action="store_true")
+    migrate.add_argument("--force", action="store_true")
 
     for name, help_text in (
         ("menu", "open the fixed-number interactive menu"),
@@ -276,8 +316,8 @@ def _build_parser() -> argparse.ArgumentParser:
         ("prepare-neutral", "archive old outputs and prepare neutral geometry optimization"),
         ("submit-neutral", "submit the neutral job and return immediately"),
         ("check-neutral", "check one neutral job/output state without submitting"),
-        ("configure-scheduler", "interactively configure PBS nodes and cores"),
-        ("select-node", "interactively select PBS nodes and cores"),
+        ("configure-scheduler", "interactively configure SLURM partitions, nodes, and tasks"),
+        ("select-node", "interactively select a SLURM partition and node"),
         ("plan", "show queue snapshot and initial submission batches"),
         ("prepare-charge", "prepare charge-point geometry optimization folders"),
         ("prepare", "compatibility alias for prepare-charge"),
@@ -381,8 +421,8 @@ def _cmd_init(args, input_fn: InputFn, output: OutputFn) -> int:
     )
     output(f"SHE reference：{reference.value:.6g} eV")
     output(f"参考来源：{reference.source or '未填写'}")
-    scheduler_kind = args.scheduler or _choose("Scheduler", ["pbs", "slurm", "custom"], input_fn, output)
-    default_script = {"pbs": "vasp.pbs", "slurm": "vasp.slurm", "custom": "submit.sh"}[scheduler_kind]
+    scheduler_kind = args.scheduler or _choose("Scheduler", ["slurm", "custom"], input_fn, output)
+    default_script = {"slurm": "vasp.slurm", "custom": "submit.sh"}[scheduler_kind]
     script = args.script or input_fn(f"Submission script [{default_script}]: ").strip() or default_script
     _ensure_standard_inputs(workdir, args.yes, input_fn, output)
     script_path = workdir / script
@@ -438,7 +478,6 @@ def _cmd_init(args, input_fn: InputFn, output: OutputFn) -> int:
         if not _confirm("Write INCAR, vaspsolkit.json, and state file?", input_fn):
             output("initialization cancelled")
             return 1
-    workflow.pbs_file = script
     scheduler = SchedulerConfig(kind=scheduler_kind, script=script)
     if scheduler_kind == "custom":
         submit = input_fn("Custom submit command tokens (use {script}): ").strip() if not args.yes else ""
@@ -447,8 +486,9 @@ def _cmd_init(args, input_fn: InputFn, output: OutputFn) -> int:
         scheduler.submit_command = submit.split()
     config = KitConfig(profile=profile, workflow=workflow, scheduler=scheduler)
     config_path = Path(args.config) if args.config else workdir / "vaspsolkit.json"
+    config_before = config_path.read_bytes() if config_path.exists() else EXPECT_ABSENT
     incar_path.write_text(candidate, encoding="utf-8")
-    write_kit_config(config_path, config)
+    write_kit_config(config_path, config, expected_current=config_before)
     WorkflowState(stage="setup").save(workdir / STATE_FILENAME)
     output(f"wrote {incar_path}")
     output(f"wrote {config_path}")
@@ -476,13 +516,11 @@ def _cmd_configure_reference(args, input_fn: InputFn, output: OutputFn) -> int:
     if not args.yes and not _confirm("保存电化学参考参数？", input_fn):
         output("reference configuration cancelled")
         return 1
-    if config_path.read_bytes() != before:
-        raise RuntimeError("vaspsolkit.json 已变化，请重新预览")
     updated = copy.deepcopy(config)
     updated.workflow.she_reference = settings.value
     updated.workflow.she_reference_source = settings.source
     updated.workflow.she_reference_confirmed = True
-    write_kit_config(config_path, updated)
+    write_kit_config(config_path, updated, expected_current=before)
     output(f"wrote {config_path}")
     return 0
 
@@ -491,58 +529,58 @@ def _cmd_configure_scheduler(args, input_fn: InputFn, output: OutputFn) -> int:
     workdir = Path(args.workdir).resolve()
     workdir.mkdir(parents=True, exist_ok=True)
     config_path = Path(args.config) if args.config else workdir / "vaspsolkit.json"
+    config_before = config_path.read_bytes() if config_path.exists() else EXPECT_ABSENT
     config = load_kit_config(config_path) if config_path.exists() else KitConfig()
-    if config.scheduler.kind != "pbs":
-        raise ValueError("configure-scheduler currently supports only PBS")
+    if config.scheduler.kind != "slurm":
+        raise ValueError("configure-scheduler requires SLURM")
     scheduler = scheduler_from_config(config.scheduler)
-    if not isinstance(scheduler, PBSScheduler):
-        raise ValueError("configure-scheduler requires a PBS scheduler")
-
-    nodes_info = scheduler.inspect_nodes(
-        min_node=config.workflow.qsub_min_node,
-        ppn=config.scheduler.cores,
-    )
-    output("PBS nodes:")
+    if not isinstance(scheduler, SlurmScheduler):
+        raise ValueError("configure-scheduler requires SLURM")
+    partitions = scheduler.inspect_partitions()
+    output("SLURM partitions: " + ", ".join(partitions))
+    partition = _prompt_value("Partition", config.scheduler.partition, input_fn)
+    if partition not in partitions:
+        raise ValueError(f"unknown SLURM partition: {partition}")
+    nodes_info = scheduler.inspect_nodes(partition)
+    output(f"{partition} nodes:")
     for info in nodes_info:
         output(
             f"  {info.name}: state={info.state} total={info.total_cores} "
-            f"used={info.used_cores} free={info.free_cores}"
+            f"allocated={info.allocated_cores} idle={info.idle_cores} other={info.other_cores}"
         )
 
     nodes = _parse_node_names(input_fn("Node names (comma-separated): "))
     if not nodes:
-        raise ValueError("at least one PBS node is required")
+        raise ValueError("at least one SLURM node is required")
     by_name = {info.name: info for info in nodes_info}
     missing = [node for node in nodes if node not in by_name]
     if missing:
-        raise ValueError(f"selected node(s) not found in pbsnodes output: {', '.join(missing)}")
-    cores = _prompt_positive_int("Cores per job", config.scheduler.cores, input_fn)
-    queue = _prompt_value("PBS queue", config.scheduler.queue, input_fn)
+        raise ValueError(f"selected node(s) not in partition {partition}: {', '.join(missing)}")
+    tasks = _prompt_positive_int("Tasks per job", config.scheduler.tasks, input_fn)
     walltime = _prompt_value("Walltime", config.scheduler.walltime, input_fn)
 
     unavailable = [
         node
         for node in nodes
         if by_name[node].state.lower().find("down") >= 0
-        or by_name[node].state.lower().find("offline") >= 0
-        or by_name[node].free_cores < cores
+        or by_name[node].state.lower().find("drain") >= 0
+        or by_name[node].idle_cores < tasks
     ]
     if unavailable:
         raise ValueError(
-            "selected node(s) are not currently idle enough for the requested cores: "
+            "selected node(s) are not currently idle enough for requested tasks: "
             + ", ".join(unavailable)
         )
 
     config.scheduler.nodes = nodes
-    config.scheduler.cores = cores
-    config.scheduler.queue = queue
+    config.scheduler.node_count = len(nodes)
+    config.scheduler.tasks = tasks
+    config.scheduler.tasks_per_node = tasks
+    config.scheduler.partition = partition
     config.scheduler.walltime = walltime
-    config.workflow.qsub_ppn = cores
-    config.workflow.qsub_queue = queue
-    config.workflow.qsub_walltime = walltime
-    write_kit_config(config_path, config)
+    write_kit_config(config_path, config, expected_current=config_before)
     output(f"wrote {config_path}")
-    output(f"nodes={','.join(nodes)} cores/job={cores}")
+    output(f"partition={partition} nodes={','.join(nodes)} tasks/job={tasks}")
     return 0
 
 
@@ -638,10 +676,10 @@ def _submission_resources(config: KitConfig, args) -> ResourceRequest:
             raise ValueError("auto allocation cannot specify nodes")
         nodes = ()
     return ResourceRequest.create(
-        allocation=allocation,
-        nodes=nodes,
-        cores=args.resource_cores or current.cores,
-        queue=current.queue,
+        allocation=allocation, partition=args.resource_partition or current.partition,
+        nodes=nodes, node_count=args.resource_node_count or current.node_count,
+        tasks=args.resource_tasks or current.tasks,
+        tasks_per_node=args.resource_tasks_per_node or current.tasks_per_node,
         walltime=current.walltime,
         script=current.script,
         persist=args.save_resources,
@@ -653,8 +691,10 @@ def _config_with_submission_resources(
 ) -> KitConfig:
     effective = copy.deepcopy(config)
     effective.scheduler.nodes = list(resources.nodes)
-    effective.scheduler.cores = resources.cores
-    effective.workflow.qsub_ppn = resources.cores
+    effective.scheduler.partition = resources.partition
+    effective.scheduler.node_count = resources.node_count
+    effective.scheduler.tasks = resources.tasks
+    effective.scheduler.tasks_per_node = resources.tasks_per_node
     effective.validate()
     return effective
 
@@ -693,14 +733,14 @@ def _submit_neutral_once(
     if plan.blocked_reason:
         raise RuntimeError(
             f"{plan.blocked_reason} 请先运行 `vaspsolkit menu --workdir {workdir}` "
-            "查看诊断或执行人工 reconcile；不要再次 qsub。"
+            "查看诊断或执行人工 reconcile；不要再次 sbatch。"
         )
     result = controller.execute(plan, confirmed=confirmed)
     if not result.ok:
         detail = result.error.suggestion_zh if result.error is not None else result.message
         raise RuntimeError(
             f"{result.message} {detail} 请运行 `vaspsolkit menu --workdir {workdir}` "
-            "查看提交恢复屏障；不要再次 qsub。"
+            "查看提交恢复屏障；不要再次 sbatch。"
         )
     output(f"neutral: {result.job_ids['neutral']}")
     return 0
@@ -743,11 +783,11 @@ def _submit_selected_once(
     )
     plan = controller.plan("submit-selected", resources, selected=tuple(jobs))
     if plan.blocked_reason:
-        raise RuntimeError(f"{plan.blocked_reason}；禁止重复 qsub。")
+        raise RuntimeError(f"{plan.blocked_reason}；禁止重复 sbatch。")
     result = controller.execute(plan, confirmed=confirmed)
     if not result.ok:
         detail = result.error.suggestion_zh if result.error is not None else result.message
-        raise RuntimeError(f"{result.message} {detail}；禁止重复 qsub。")
+        raise RuntimeError(f"{result.message} {detail}；禁止重复 sbatch。")
     for name, job_id in result.job_ids.items():
         output(f"{name}: {job_id}")
     return 0
@@ -809,7 +849,7 @@ def _ensure_standard_inputs(workdir: Path, noninteractive: bool, input_fn: Input
 def _print_plan(config: KitConfig, preview, output: OutputFn) -> None:
     max_inflight = config.scheduler.max_inflight
     output(
-        f"scheduler={config.scheduler.kind} queue={config.scheduler.queue} cores/job={config.scheduler.cores} "
+        f"scheduler={config.scheduler.kind} partition={config.scheduler.partition} tasks/job={config.scheduler.tasks} "
         f"memory={config.scheduler.memory or '-'} walltime={config.scheduler.walltime} "
         f"max_inflight={max_inflight if max_inflight is not None else 'unlimited'}"
     )
@@ -904,7 +944,10 @@ def _add_submission_resource_args(parser: argparse.ArgumentParser) -> None:
         default=None,
     )
     parser.add_argument("--resource-node", action="append", default=[])
-    parser.add_argument("--resource-cores", type=int, default=None)
+    parser.add_argument("--resource-partition", default=None)
+    parser.add_argument("--resource-node-count", type=int, default=None)
+    parser.add_argument("--resource-tasks", type=int, default=None)
+    parser.add_argument("--resource-tasks-per-node", type=int, default=None)
     parser.add_argument("--save-resources", action="store_true")
 
 

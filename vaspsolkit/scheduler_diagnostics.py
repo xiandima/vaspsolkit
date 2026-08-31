@@ -29,8 +29,8 @@ class SubmitErrorInfo:
     repair_action: str = ""
 
 
-def diagnose_pbs_script(workdir: Path, scheduler: SchedulerConfig) -> List[SchedulerCheck]:
-    """Return read-only checks for the configured PBS submit script."""
+def diagnose_slurm_script(workdir: Path, scheduler: SchedulerConfig) -> List[SchedulerCheck]:
+    """Return read-only checks for the configured SLURM submit script."""
     script = Path(workdir) / scheduler.script
     if not script.is_file():
         return [
@@ -60,7 +60,7 @@ def diagnose_pbs_script(workdir: Path, scheduler: SchedulerConfig) -> List[Sched
                 "Unix line endings",
                 "FAIL",
                 f"{script} contains DOS/Windows CRLF line endings.",
-                "Convert the script to Unix line endings before qsub.",
+                "Convert the script to Unix line endings before sbatch.",
                 "fix-line-endings",
             )
         )
@@ -93,11 +93,11 @@ def diagnose_pbs_script(workdir: Path, scheduler: SchedulerConfig) -> List[Sched
             "Executable bit",
             "PASS" if os.access(script, os.X_OK) else "WARN",
             str(script),
-            "qsub usually accepts readable scripts; add execute permission if this server requires it.",
+            "sbatch usually accepts readable scripts; add execute permission if this server requires it.",
             "chmod-executable" if not os.access(script, os.X_OK) else "",
         )
     )
-    checks.extend(_pbs_resource_checks(text, scheduler))
+    checks.extend(_slurm_resource_checks(text, scheduler))
     return checks
 
 
@@ -106,16 +106,16 @@ def classify_submit_error(exc: Exception) -> SubmitErrorInfo:
     message = str(exc)
     if re.search(r"DOS/Windows text format|CRLF|line endings", message, re.IGNORECASE):
         return SubmitErrorInfo(
-            "PBS submit failed",
+            "SLURM submit failed",
             "dos-line-endings",
-            "qsub reports that the submit script uses DOS/Windows line endings.",
+            "sbatch reports that the submit script uses DOS/Windows line endings.",
             "Choose 'fix line endings and retry' or run dos2unix on the submit script.",
             detail,
             "fix-line-endings",
         )
     if re.search(r"permission denied", message, re.IGNORECASE):
         return SubmitErrorInfo(
-            "PBS submit failed",
+            "SLURM submit failed",
             "permission-denied",
             "The scheduler reported a permission error for the submit script or directory.",
             "Check script permissions and the case directory permissions before retrying.",
@@ -126,7 +126,7 @@ def classify_submit_error(exc: Exception) -> SubmitErrorInfo:
         "Submit failed",
         "unknown-submit-error",
         "The scheduler rejected the submit command.",
-        "Review the scheduler page, script path, queue, node, cores, and raw error.",
+        "Review the scheduler page, script path, partition, nodes, tasks, and raw error.",
         detail,
     )
 
@@ -157,41 +157,42 @@ def repair_submit_script(
     raise ValueError(f"unknown submit-script repair action: {action}")
 
 
-def _pbs_resource_checks(text: str, scheduler: SchedulerConfig) -> List[SchedulerCheck]:
+def _slurm_resource_checks(text: str, scheduler: SchedulerConfig) -> List[SchedulerCheck]:
     checks: List[SchedulerCheck] = []
-    if scheduler.queue and f"#PBS -q {scheduler.queue}" not in text:
+    if scheduler.partition and not re.search(
+        rf"^\s*#SBATCH\s+(?:-p\s+|--partition(?:=|\s+)){re.escape(scheduler.partition)}(?:\s|$)",
+        text, re.MULTILINE,
+    ):
         checks.append(
             SchedulerCheck(
-                "pbs-queue-line",
-                "PBS queue line",
+                "slurm-partition-line",
+                "SLURM partition line",
                 "WARN",
-                f"Expected '#PBS -q {scheduler.queue}' when script resources are managed inline.",
-                "Ensure the script or qsub arguments use the selected queue.",
-                "sync-pbs-resources",
+                f"Expected partition '{scheduler.partition}'.",
+                "Synchronize the script or sbatch partition.",
+                "sync-slurm-resources",
             )
         )
-    node = scheduler.nodes[0] if scheduler.nodes else "1"
-    expected_nodes = f"nodes={node}:ppn={scheduler.cores}" if scheduler.nodes else f"nodes=1:ppn={scheduler.cores}"
-    if expected_nodes not in text:
+    if str(scheduler.tasks) not in text:
         checks.append(
             SchedulerCheck(
-                "pbs-resource-line",
-                "PBS resource line",
+                "slurm-resource-line",
+                "SLURM task line",
                 "WARN",
-                f"Expected resource containing '{expected_nodes}'.",
-                "Ensure qsub arguments or script resources match selected nodes and cores.",
-                "sync-pbs-resources",
+                f"Expected ntasks '{scheduler.tasks}'.",
+                "Synchronize the script or sbatch task count.",
+                "sync-slurm-resources",
             )
         )
     if scheduler.walltime and scheduler.walltime not in text:
         checks.append(
             SchedulerCheck(
-                "pbs-walltime-line",
-                "PBS walltime line",
+                "slurm-walltime-line",
+                "SLURM walltime line",
                 "WARN",
                 f"Expected walltime '{scheduler.walltime}'.",
-                "Ensure qsub arguments or script resources use the selected walltime.",
-                "sync-pbs-resources",
+                "Ensure sbatch arguments or script resources use the selected walltime.",
+                "sync-slurm-resources",
             )
         )
     return checks

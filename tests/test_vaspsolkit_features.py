@@ -42,7 +42,7 @@ class VaspsolkitConfigAndStateTests(unittest.TestCase):
 
         self.assertEqual(loaded.neutral.metadata["stage"], "neutral_relax")
         self.assertEqual(loaded.neutral.metadata["source_poscar_sha256"], "abc")
-    def test_legacy_config_migrates_to_versioned_kit_config(self):
+    def test_flat_pbs_shaped_config_requires_slurm_profile_selection(self):
         from vaspsolkit.config import load_kit_config
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -52,20 +52,15 @@ class VaspsolkitConfigAndStateTests(unittest.TestCase):
                     {
                         "folders": ["1", "2", "3", "4", "5"],
                         "nelect_offsets": [-1.0, -0.5, 0.0, 0.5, 1.0],
-                        "qsub_queue": "normal",
-                        "qsub_ppn": 48,
+                        "sbatch_queue": "normal",
+                        "sbatch_ppn": 48,
                     }
                 ),
                 encoding="utf-8",
             )
 
-            config = load_kit_config(path)
-
-        self.assertEqual(config.config_version, 1)
-        self.assertEqual(config.scheduler.kind, "pbs")
-        self.assertEqual(config.scheduler.queue, "normal")
-        self.assertEqual(config.scheduler.cores, 48)
-        self.assertEqual(config.workflow.nelect_offsets, [-1.0, -0.5, 0.0, 0.5, 1.0])
+            with self.assertRaisesRegex(ValueError, "select a SLURM profile"):
+                load_kit_config(path)
 
     def test_charge_sweep_requires_exactly_one_neutral_point(self):
         from vaspsolkit.config import WorkflowConfig
@@ -231,7 +226,7 @@ class VaspsolkitSchedulerTests(unittest.TestCase):
         from vaspsolkit.config import KitConfig, SchedulerConfig, WorkflowConfig
         from vaspsolkit.orchestrator import submit_ready_jobs
         from vaspsolkit.state import JobRecord, WorkflowState
-        from vaspsolkit.scheduler import PBSScheduler
+        from vaspsolkit.scheduler import SlurmScheduler
 
         calls = []
 
@@ -239,7 +234,7 @@ class VaspsolkitSchedulerTests(unittest.TestCase):
             import subprocess
 
             calls.append((list(args), cwd))
-            if args[0] == "qstat":
+            if args[0] == "squeue":
                 return subprocess.CompletedProcess(
                     args,
                     0,
@@ -249,7 +244,7 @@ class VaspsolkitSchedulerTests(unittest.TestCase):
                     ),
                     stderr="",
                 )
-            if args[:2] == ["pbsnodes", "-a"]:
+            if args[:2] == ["sinfo", "-a"]:
                 return subprocess.CompletedProcess(
                     args,
                     0,
@@ -261,8 +256,8 @@ class VaspsolkitSchedulerTests(unittest.TestCase):
                     ),
                     stderr="",
                 )
-            if args[0] == "qsub":
-                return subprocess.CompletedProcess(args, 0, stdout="charge-1.server\n", stderr="")
+            if args[0] == "sbatch":
+                return subprocess.CompletedProcess(args, 0, stdout="101\n", stderr="")
             raise AssertionError(f"unexpected command: {args}")
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -271,16 +266,16 @@ class VaspsolkitSchedulerTests(unittest.TestCase):
             for name in ("1", "2", "3"):
                 folder = root / "charge_sweep" / name
                 folder.mkdir(parents=True)
-                for filename in ("INCAR", "POSCAR", "POTCAR", "KPOINTS", "vasp.pbs"):
+                for filename in ("INCAR", "POSCAR", "POTCAR", "KPOINTS", "vasp.slurm"):
                     (folder / filename).write_text("input\n", encoding="utf-8")
                 jobs[name] = JobRecord(folder=str(folder.relative_to(root)))
             state = WorkflowState(stage="prepared", jobs=jobs)
             config = KitConfig(
                 workflow=WorkflowConfig(folders=["1", "2", "3"], nelect_offsets=[-1.0, 0.0, 1.0]),
                 scheduler=SchedulerConfig(
-                    kind="pbs",
-                    script="vasp.pbs",
-                    cores=48,
+                    kind="slurm",
+                    script="vasp.slurm",
+                    tasks=48,
                     max_inflight=5,
                     nodes=["node18.example.invalid"],
                 ),
@@ -290,17 +285,18 @@ class VaspsolkitSchedulerTests(unittest.TestCase):
                 root,
                 config,
                 state,
-                scheduler=PBSScheduler(runner=runner),
+                scheduler=SlurmScheduler(runner=runner),
                 confirmed=True,
             )
 
-        self.assertEqual(submitted, {"1": "charge-1.server"})
-        qsub = next(args for args, _ in calls if args[0] == "qsub")
-        self.assertIn("nodes=node18.example.invalid:ppn=48,walltime=48:00:00", qsub)
+        self.assertEqual(set(submitted), {"1", "2", "3"})
+        sbatch = next(args for args, _ in calls if args[0] == "sbatch")
+        self.assertIn("--partition", sbatch)
+        self.assertIn("--ntasks", sbatch)
 
     def test_scheduler_configure_interactive_saves_nodes_cores_without_prompting_capacity(self):
         from vaspsolkit.cli import main
-        from vaspsolkit.scheduler import PBSScheduler
+        from vaspsolkit.scheduler import SlurmScheduler
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -311,24 +307,25 @@ class VaspsolkitSchedulerTests(unittest.TestCase):
                         "config_version": 1,
                         "profile": "vaspsol-sweep",
                         "workflow": {},
-                        "scheduler": {"kind": "pbs", "script": "vasp.pbs"},
+                        "scheduler": {"kind": "slurm", "script": "vasp.slurm"},
                     }
                 ),
                 encoding="utf-8",
             )
             output = []
-            inputs = iter(["node18.example.invalid,node19.example.invalid", "24", "normal", "48:00:00"])
+            inputs = iter(["normal", "node18.example.invalid,node19.example.invalid", "24", "48:00:00"])
 
             class FakeNode:
                 def __init__(self, name):
                     self.name = name
-                    self.state = "free"
+                    self.state = "idle"
                     self.total_cores = 48
-                    self.used_cores = 0
-                    self.free_cores = 48
+                    self.allocated_cores = 0
+                    self.idle_cores = 48
+                    self.other_cores = 0
 
-            scheduler = PBSScheduler()
-            with patch.object(scheduler, "inspect_nodes", return_value=[FakeNode("node18.example.invalid"), FakeNode("node19.example.invalid")]), patch(
+            scheduler = SlurmScheduler()
+            with patch.object(scheduler, "inspect_partitions", return_value=["normal"]), patch.object(scheduler, "inspect_nodes", return_value=[FakeNode("node18.example.invalid"), FakeNode("node19.example.invalid")]), patch(
                 "vaspsolkit.cli.scheduler_from_config", return_value=scheduler
             ):
                 result = main(
@@ -341,28 +338,28 @@ class VaspsolkitSchedulerTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         self.assertEqual(saved["scheduler"]["nodes"], ["node18.example.invalid", "node19.example.invalid"])
-        self.assertEqual(saved["scheduler"]["cores"], 24)
+        self.assertEqual(saved["scheduler"]["tasks"], 24)
         self.assertIsNone(saved["scheduler"]["max_inflight"])
 
     def test_pbs_script_diagnostics_detect_dos_line_endings(self):
         from vaspsolkit.config import SchedulerConfig
-        from vaspsolkit.scheduler_diagnostics import diagnose_pbs_script
+        from vaspsolkit.scheduler_diagnostics import diagnose_slurm_script
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            (root / "vasp.pbs").write_bytes(b"#!/bin/bash\r\n#PBS -q normal\r\n")
+            (root / "vasp.slurm").write_bytes(b"#!/bin/bash\r\n#SLURM -q normal\r\n")
 
-            checks = diagnose_pbs_script(root, SchedulerConfig(kind="pbs", script="vasp.pbs"))
+            checks = diagnose_slurm_script(root, SchedulerConfig(kind="slurm", script="vasp.slurm"))
 
         by_code = {check.code: check for check in checks}
         self.assertEqual(by_code["script-line-endings"].status, "FAIL")
         self.assertEqual(by_code["script-line-endings"].repair_action, "fix-line-endings")
 
-    def test_classify_qsub_dos_line_ending_error(self):
+    def test_classify_sbatch_dos_line_ending_error(self):
         from vaspsolkit.scheduler_diagnostics import classify_submit_error
 
         card = classify_submit_error(
-            RuntimeError("qsub failed in /case: qsub: script is written in DOS/Windows text format")
+            RuntimeError("sbatch failed in /case: sbatch: script is written in DOS/Windows text format")
         )
 
         self.assertEqual(card.cause_code, "dos-line-endings")
@@ -446,14 +443,14 @@ class VaspsolkitSchedulerTests(unittest.TestCase):
         self.assertEqual(state.state, "UNKNOWN")
 
     def test_pbs_connection_failure_is_unknown_not_missing(self):
-        from vaspsolkit.scheduler import PBSScheduler
+        from vaspsolkit.scheduler import SlurmScheduler
 
         def runner(args, cwd=None):
             import subprocess
 
             return subprocess.CompletedProcess(args, 2, "", "cannot connect to server")
 
-        state = PBSScheduler(runner=runner).status("123.server")
+        state = SlurmScheduler(runner=runner).status("123.server")
 
         self.assertTrue(state.exists)
         self.assertEqual(state.state, "UNKNOWN")
@@ -647,7 +644,7 @@ class VaspsolkitOrchestratorTests(unittest.TestCase):
                 "POTCAR": "potcar\n",
                 "KPOINTS": "kpoints\n",
                 "INCAR": "IBRION = 1\nNSW = 88\nEDIFFG = -0.03\nICHARG = 2\n",
-                "vasp.pbs": "#!/bin/bash\n",
+                "vasp.slurm": "#!/bin/bash\n",
                 "CONTCAR": "old static result\n",
                 "OUTCAR": "old static result\n",
                 "CHGCAR": "old charge\n",
@@ -658,7 +655,7 @@ class VaspsolkitOrchestratorTests(unittest.TestCase):
             (root / "charge_sweep" / "1" / "OUTCAR").write_text("old charge point\n", encoding="utf-8")
             config = KitConfig(
                 workflow=WorkflowConfig(nelect_ref=10.0),
-                scheduler=SchedulerConfig(kind="pbs", script="vasp.pbs"),
+                scheduler=SchedulerConfig(kind="slurm", script="vasp.slurm"),
             )
 
             state = prepare_neutral_job(root, config)
@@ -692,7 +689,7 @@ class VaspsolkitOrchestratorTests(unittest.TestCase):
                 "CHGCAR": "neutral optimized charge\n",
                 "LOCPOT": "neutral locpot\n",
                 "OUTCAR": "neutral outcar\n",
-                "vasp.pbs": "#!/bin/bash\n",
+                "vasp.slurm": "#!/bin/bash\n",
             }.items():
                 (root / filename).write_text(content, encoding="utf-8")
             state = WorkflowState(
@@ -710,7 +707,7 @@ class VaspsolkitOrchestratorTests(unittest.TestCase):
                     nelect_offsets=[-1.0, 0.0, 1.0],
                     nelect_ref=10.0,
                 ),
-                scheduler=SchedulerConfig(kind="pbs", script="vasp.pbs"),
+                scheduler=SchedulerConfig(kind="slurm", script="vasp.slurm"),
             )
 
             prepared = prepare_kit_jobs(root, config)
@@ -742,7 +739,7 @@ class VaspsolkitOrchestratorTests(unittest.TestCase):
                 "CHGCAR": "neutral optimized charge\n",
                 "LOCPOT": "neutral locpot\n",
                 "OUTCAR": "neutral outcar\n",
-                "vasp.pbs": "#!/bin/bash\n",
+                "vasp.slurm": "#!/bin/bash\n",
             }.items():
                 (root / filename).write_text(content, encoding="utf-8")
             WorkflowState(
@@ -751,7 +748,7 @@ class VaspsolkitOrchestratorTests(unittest.TestCase):
             ).save(root / "vaspsolkit.state.json")
             config = KitConfig(
                 workflow=WorkflowConfig(folders=["1"], nelect_offsets=[0.0], nelect_ref=10.0),
-                scheduler=SchedulerConfig(kind="pbs", script="vasp.pbs"),
+                scheduler=SchedulerConfig(kind="slurm", script="vasp.slurm"),
             )
             state = prepare_kit_jobs(root, config)
 
@@ -852,7 +849,7 @@ class VaspsolkitOrchestratorTests(unittest.TestCase):
             for name in ("1", "2", "3"):
                 folder = root / "charge_sweep" / name
                 folder.mkdir(parents=True)
-                for filename in ("INCAR", "POSCAR", "POTCAR", "KPOINTS", "CHGCAR", "vasp.pbs"):
+                for filename in ("INCAR", "POSCAR", "POTCAR", "KPOINTS", "CHGCAR", "vasp.slurm"):
                     (folder / filename).write_text("ok\n", encoding="utf-8")
             state = WorkflowState(
                 stage="charge_ready",
@@ -867,7 +864,7 @@ class VaspsolkitOrchestratorTests(unittest.TestCase):
             )
             config = KitConfig(
                 workflow=WorkflowConfig(job_root="charge_sweep"),
-                scheduler=SchedulerConfig(kind="slurm", script="vasp.pbs", max_inflight=1),
+                scheduler=SchedulerConfig(kind="slurm", script="vasp.slurm", max_inflight=1),
             )
             scheduler = FakeScheduler()
 
@@ -933,7 +930,7 @@ class VaspsolkitOrchestratorTests(unittest.TestCase):
 
             def submit(self, folder, script, **kwargs):
                 self.submits += 1
-                return "neutral-123"
+                return "123"
 
             def status(self, job_id):
                 self.status_calls += 1
@@ -950,7 +947,7 @@ class VaspsolkitOrchestratorTests(unittest.TestCase):
 
             self.assertEqual(scheduler.submits, 1)
             self.assertEqual(scheduler.status_calls, 0)
-            self.assertEqual(state.neutral.job_id, "neutral-123")
+            self.assertEqual(state.neutral.job_id, "123")
             self.assertEqual(state.neutral.status, "SUBMITTED")
 
     def test_submit_neutral_preserves_relaxation_provenance(self):
@@ -999,7 +996,7 @@ class VaspsolkitOrchestratorTests(unittest.TestCase):
 
         class FakeScheduler:
             def submit(self, folder, script, **kwargs):
-                return "neutral-123"
+                return "123"
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1019,7 +1016,7 @@ class VaspsolkitOrchestratorTests(unittest.TestCase):
 
         class FakeScheduler:
             def submit(self, folder, script, **kwargs):
-                return "neutral-123"
+                return "123"
 
             def status(self, job_id):
                 return JobState(job_id=job_id, exists=True, state="R")
@@ -1151,7 +1148,7 @@ class VaspsolkitCliTests(unittest.TestCase):
                         "specified",
                         "--resource-node",
                         "node24",
-                        "--resource-cores",
+                        "--resource-tasks",
                         "40",
                         "--save-resources",
                     ]
@@ -1160,7 +1157,7 @@ class VaspsolkitCliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         resources = submit.call_args.kwargs["resources"]
         self.assertEqual(resources.nodes, ("node24",))
-        self.assertEqual(resources.cores, 40)
+        self.assertEqual(resources.tasks, 40)
         self.assertTrue(resources.persist)
 
     def test_submit_selected_resource_flags_reach_reviewed_request(self):
@@ -1180,7 +1177,7 @@ class VaspsolkitCliTests(unittest.TestCase):
                         "2",
                         "--resource-allocation",
                         "auto",
-                        "--resource-cores",
+                        "--resource-tasks",
                         "32",
                     ]
                 )
@@ -1189,7 +1186,7 @@ class VaspsolkitCliTests(unittest.TestCase):
         resources = submit.call_args.kwargs["resources"]
         self.assertEqual(resources.allocation, "auto")
         self.assertEqual(resources.nodes, ())
-        self.assertEqual(resources.cores, 32)
+        self.assertEqual(resources.tasks, 32)
         self.assertFalse(resources.persist)
 
     def test_auto_resource_flags_reject_named_node_before_submission(self):
@@ -1373,17 +1370,26 @@ class VaspsolkitCliTests(unittest.TestCase):
             legacy = root / "vaspsolflow.json"
             target = root / "vaspsolkit.json"
             legacy.write_text(
-                json.dumps({"folders": ["1", "2", "3"], "nelect_offsets": [-1, 0, 1]}),
+                json.dumps(
+                    {
+                        "config_version": 1,
+                        "workflow": {"folders": ["1", "2", "3"], "nelect_offsets": [-1, 0, 1]},
+                        "scheduler": {"kind": "slurm", "partition": "compute", "tasks": 48},
+                    }
+                ),
                 encoding="utf-8",
             )
 
-            result = main(["migrate", "--input", str(legacy), "--output", str(target)])
+            result = main(
+                ["migrate", "--input", str(legacy), "--output", str(target), "--yes"]
+            )
 
             migrated = json.loads(target.read_text(encoding="utf-8"))
             self.assertEqual(result, 0)
-            self.assertEqual(migrated["config_version"], 1)
+            self.assertEqual(migrated["config_version"], 2)
             self.assertIn("workflow", migrated)
             self.assertIn("scheduler", migrated)
+            self.assertEqual(migrated["scheduler"]["partition"], "compute")
 
     def test_noninteractive_init_applies_profile_and_writes_state(self):
         from vaspsolkit.cli import main
@@ -1446,7 +1452,7 @@ class VaspsolkitCliTests(unittest.TestCase):
                 "ENCUT = 450\nGGA = RP\nIBRION = 1\nNSW = 88\nEDIFFG = -0.03\n",
                 encoding="utf-8",
             )
-            (root / "vasp.pbs").write_text("#!/bin/bash\n", encoding="utf-8")
+            (root / "vasp.slurm").write_text("#!/bin/bash\n", encoding="utf-8")
 
             result = main(
                 [
@@ -1454,9 +1460,9 @@ class VaspsolkitCliTests(unittest.TestCase):
                     "--workdir",
                     str(root),
                     "--scheduler",
-                    "pbs",
+                    "slurm",
                     "--script",
-                    "vasp.pbs",
+                    "vasp.slurm",
                     "--she-reference",
                     "4.70",
                     "--yes",
@@ -1487,7 +1493,7 @@ class VaspsolkitCliTests(unittest.TestCase):
 
             def submit(self, folder, script, **kwargs):
                 self.submit_calls += 1
-                return "neutral-123"
+                return "123"
 
             def status(self, job_id):
                 self.status_calls += 1
@@ -1524,7 +1530,7 @@ class VaspsolkitCliTests(unittest.TestCase):
             self.assertEqual(result, 0)
             self.assertEqual(scheduler.submit_calls, 1)
             self.assertEqual(scheduler.status_calls, 0)
-            self.assertTrue(any("neutral-123" in line for line in output))
+            self.assertTrue(any("123" in line for line in output))
 
     def test_run_dispatcher_submits_neutral_once_and_returns(self):
         from vaspsolkit.cli import main
@@ -1537,7 +1543,7 @@ class VaspsolkitCliTests(unittest.TestCase):
 
             def submit(self, folder, script, **kwargs):
                 self.submit_calls += 1
-                return "neutral-123"
+                return "123"
 
             def status(self, job_id):
                 self.status_calls += 1
@@ -1648,7 +1654,7 @@ class VaspsolkitResetQueuedTests(unittest.TestCase):
         self.assertEqual(loaded.jobs["2"].job_id, "127913.node01.example.invalid")
         self.assertIn("outcar_missing", loaded.jobs["2"].diagnostics)
 
-    def test_reset_queued_jobs_skips_qdel_for_missing_unstarted_job(self):
+    def test_reset_queued_jobs_skips_scancel_for_missing_unstarted_job(self):
         from vaspsolkit.orchestrator import reset_queued_jobs
         from vaspsolkit.scheduler import JobState
         from vaspsolkit.state import JobRecord, WorkflowState
@@ -1722,7 +1728,7 @@ class VaspsolkitResetQueuedTests(unittest.TestCase):
         self.assertEqual(state.jobs["2"].status, "QUEUED")
         self.assertEqual(state.jobs["3"].status, "QUEUED")
 
-    def test_reset_queued_jobs_recovers_when_qdel_races_with_missing_job(self):
+    def test_reset_queued_jobs_recovers_when_scancel_races_with_missing_job(self):
         from vaspsolkit.orchestrator import reset_queued_jobs
         from vaspsolkit.scheduler import JobState
         from vaspsolkit.state import JobRecord, WorkflowState
@@ -1739,7 +1745,7 @@ class VaspsolkitResetQueuedTests(unittest.TestCase):
 
             def cancel(self, job_id):
                 self.cancelled.append(job_id)
-                raise RuntimeError(f"qdel failed for {job_id}: nonexistent job id")
+                raise RuntimeError(f"scancel failed for {job_id}: nonexistent job id")
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

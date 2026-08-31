@@ -25,7 +25,6 @@ from .models import (
     WorkbenchSnapshot,
     WorkflowStep,
 )
-from .scheduler_profiles import detect_scheduler_profile
 
 
 _NAVIGATION = ("workspace", "inputs", "tasks", "queue", "results", "settings", "exit")
@@ -87,10 +86,10 @@ def build_workbench_snapshot(
     recorded_jobs = (() if neutral_record is None else (neutral,)) + charges
 
     config = configured if configured is not None else case.config
-    scheduler = config.scheduler if config is not None else case.scheduler
-    scheduler_walltime = (
-        config.scheduler.walltime if config is not None else SchedulerConfig().walltime
-    )
+    if config is None:
+        config = KitConfig()
+    scheduler = config.scheduler
+    scheduler_walltime = config.scheduler.walltime
     recommendation = RecommendationView(
         name=action.name,
         title=action.title_zh,
@@ -106,7 +105,6 @@ def build_workbench_snapshot(
         "INCAR",
         "KPOINTS",
         "POTCAR",
-        workflow_config.pbs_file,
         *((scheduler.script,) if scheduler.script not in {"", "-"} else ()),
         "vaspsolkit.json",
         STATE_FILENAME,
@@ -117,7 +115,7 @@ def build_workbench_snapshot(
             name,
             required=name != STATE_FILENAME,
             scheduler=scheduler,
-            role=_input_role(name, workflow_config.pbs_file, scheduler.script),
+            role=_input_role(name, scheduler.script, scheduler.script),
         )
         for name in dict.fromkeys(input_names)
     )
@@ -141,8 +139,8 @@ def build_workbench_snapshot(
         queue_rows=recorded_jobs,
         scheduler=SchedulerView(
             kind=scheduler.kind,
-            queue=scheduler.queue,
-            cores=scheduler.cores,
+            partition=scheduler.partition,
+            tasks=scheduler.tasks,
             nodes=tuple(scheduler.nodes),
             script=scheduler.script,
             walltime=scheduler_walltime,
@@ -176,10 +174,11 @@ def _scheduler_resource_syntax(root: Path, script_name: str) -> str:
         return "unmanaged"
     try:
         text = script.read_text(encoding="utf-8")
-        return detect_scheduler_profile(
-            text,
-            script_name=script_name,
-        ).resource_syntax
+        if re.search(r"^\s*#SBATCH\s+--nodes(?:=|\s)", text, re.MULTILINE):
+            return "nodes"
+        if re.search(r"^\s*#SBATCH\s+-N(?:\s|\d)", text, re.MULTILINE):
+            return "nodes"
+        return "unmanaged"
     except (OSError, UnicodeDecodeError, TypeError, ValueError):
         return "unmanaged"
 
@@ -199,7 +198,6 @@ def _config_paths_are_safe(root: Path, config: KitConfig) -> bool:
         path is not None
         for path in (
             _safe_case_path(root, config.scheduler.script),
-            _safe_case_path(root, workflow.pbs_file),
             _safe_case_path(root, workflow.results_root, workflow.summary_file),
             _safe_case_path(root, workflow.results_root, workflow.analysis_file),
         )
@@ -531,19 +529,19 @@ def _validate_script(text: str, data: bytes, scheduler) -> str:
         raise ValueError("submission script uses DOS/Windows line endings")
     if "\x00" in text:
         raise ValueError("submission script contains NUL bytes")
-    queue_match = re.search(r"^#PBS\s+-q\s+(\S+)", text, re.MULTILINE)
-    resource_match = re.search(r"^#PBS\s+-l\s+[^\n]*?(?:nodes=\S+?:)?ppn=(\d+)", text, re.MULTILINE)
-    walltime_match = re.search(r"^#PBS\s+-l\s+[^\n]*walltime=(\S+)", text, re.MULTILINE)
-    queue = queue_match.group(1) if queue_match else "unknown"
-    cores = resource_match.group(1) if resource_match else "unknown"
+    partition_match = re.search(r"^#SBATCH\s+(?:-p\s+|--partition(?:=|\s+))(\S+)", text, re.MULTILINE)
+    tasks_match = re.search(r"^#SBATCH\s+(?:-n\s*|--ntasks(?:=|\s+))(\d+)", text, re.MULTILINE)
+    walltime_match = re.search(r"^#SBATCH\s+(?:-t\s+|--time(?:=|\s+))(\S+)", text, re.MULTILINE)
+    partition = partition_match.group(1) if partition_match else "unknown"
+    tasks = tasks_match.group(1) if tasks_match else "unknown"
     walltime = walltime_match.group(1) if walltime_match else "unknown"
     lines = text.splitlines()
     kind = scheduler.kind
     has_command = any(line.strip() and not line.lstrip().startswith("#") for line in lines)
-    directives = "#SBATCH" if kind == "slurm" else "#PBS"
+    directives = "#SBATCH" if kind == "slurm" else "#CUSTOM"
     if not any(line.startswith(directives) for line in lines) and not has_command:
         raise ValueError("submission script has no scheduler directive or executable command")
-    return f"line-endings=Unix · queue={queue} · cores={cores} · walltime={walltime}"
+    return f"line-endings=Unix · partition={partition} · tasks={tasks} · walltime={walltime}"
 
 
 def _result_row(root: Path, results_root: str, name: str) -> ResultRow:

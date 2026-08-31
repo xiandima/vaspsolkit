@@ -8,7 +8,7 @@ my-case/
 ├── INCAR
 ├── KPOINTS
 ├── POTCAR
-└── vasp.pbs
+└── vasp.slurm
 ```
 
-Never publish `POTCAR`: its redistribution is controlled by the pseudopotential licence. The batch script must be adapted to the target HPC environment and tested with a normal VASP job before it is used with VASPsolKit.
+Never publish `POTCAR`: its redistribution is controlled by the pseudopotential licence. Adapt `vasp.slurm` to the target SLURM cluster and test it with a normal VASP job before using VASPsolKit.

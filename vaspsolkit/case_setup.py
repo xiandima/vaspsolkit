@@ -11,7 +11,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple
 
-from .config import KitConfig, SchedulerConfig, WorkflowConfig
+from .config import (
+    EXPECT_ABSENT,
+    KitConfig,
+    SchedulerConfig,
+    WorkflowConfig,
+    serialize_kit_config,
+    write_config_bytes,
+)
 from .inputs import plan_neutral_vaspsol_update, suggest_encut, validate_potcar_order
 from .state import workflow_state_lock
 
@@ -135,6 +142,7 @@ class CaseInitializationPlan:
     workdir: Path
     case_fingerprint: CaseDirectoryFingerprint
     config: KitConfig
+    config_before_bytes: Optional[bytes]
     incar_before: str
     incar_after: str
     file_changes: Tuple[PlannedFileChange, ...]
@@ -148,6 +156,10 @@ class CaseInitializationPlan:
         if not isinstance(raw_config, KitConfig):
             raise TypeError("config must be a KitConfig")
         raw_config.validate()
+        if self.config_before_bytes is not None and not isinstance(
+            self.config_before_bytes, bytes
+        ):
+            raise TypeError("config_before_bytes must be bytes or None")
         if not isinstance(self.case_fingerprint, CaseDirectoryFingerprint):
             raise TypeError("case_fingerprint must be CaseDirectoryFingerprint")
         if self.case_fingerprint.path != self.workdir:
@@ -158,6 +170,13 @@ class CaseInitializationPlan:
             raise TypeError("file_changes must be a tuple")
         if any(not isinstance(change, PlannedFileChange) for change in self.file_changes):
             raise TypeError("file_changes must contain PlannedFileChange values")
+        config_changes = tuple(
+            change for change in self.file_changes if change.path.name == CONFIG_FILENAME
+        )
+        if len(config_changes) != 1:
+            raise ValueError("file_changes must contain exactly one config change")
+        if (self.config_before_bytes is None) != (config_changes[0].before is None):
+            raise ValueError("config byte snapshot must match config preview presence")
         for change in self.file_changes:
             try:
                 change.path.relative_to(self.workdir)
@@ -247,19 +266,17 @@ def plan_case_initialization(
         raise ValueError("conflicting INCAR settings require manual resolution: " + details)
 
     workflow = copy.deepcopy(workflow_config) if workflow_config is not None else WorkflowConfig()
-    workflow.pbs_file = scheduler.script
-    workflow.qsub_ppn = scheduler.cores
-    workflow.qsub_queue = scheduler.queue
-    workflow.qsub_walltime = scheduler.walltime
     config = KitConfig(profile="vaspsol-sweep", workflow=workflow, scheduler=scheduler)
     config.validate()
-    config_after = json.dumps(config.to_dict(), indent=2, sort_keys=True)
+    config_after = serialize_kit_config(config).decode("utf-8")
     state_after = json.dumps(
         {"jobs": {}, "neutral": None, "prepared_checked": False, "stage": "setup"},
         indent=2,
         sort_keys=True,
     )
 
+    config_path = _nominal_target_path(case, CONFIG_FILENAME)
+    config_before_bytes = config_path.read_bytes() if config_path.is_file() else None
     target_fingerprints = tuple(
         _fingerprint_target(case, label, _nominal_target_path(case, label))
         for label in ("INCAR", CONFIG_FILENAME, STATE_FILENAME)
@@ -277,7 +294,10 @@ def plan_case_initialization(
         )
     for name, after in ((CONFIG_FILENAME, config_after), (STATE_FILENAME, state_after)):
         path = _nominal_target_path(case, name)
-        before = path.read_text(encoding="utf-8") if path.is_file() else None
+        if name == CONFIG_FILENAME and config_before_bytes is not None:
+            before = _normalized_preview_text(config_before_bytes)
+        else:
+            before = path.read_text(encoding="utf-8") if path.is_file() else None
         changes.append(
             PlannedFileChange(path, before, after, "update" if before is not None else "create")
         )
@@ -285,6 +305,7 @@ def plan_case_initialization(
         case,
         _fingerprint_case_directory(case),
         config,
+        config_before_bytes,
         incar_before,
         update.candidate,
         tuple(changes),
@@ -331,12 +352,33 @@ def _apply_case_initialization_locked(
         raise CaseInitializationApplyError("stage", path, exc) from exc
 
     try:
+        config_temp, config_change = next(
+            item for item in staged if item[1].path.name == CONFIG_FILENAME
+        )
+        failed_path = config_change.path
+        expected_config = (
+            EXPECT_ABSENT
+            if plan.config_before_bytes is None
+            else plan.config_before_bytes
+        )
+        write_config_bytes(
+            config_change.path,
+            config_temp.read_bytes(),
+            expected_current=expected_config,
+        )
+        config_temp.unlink()
+        staged = [item for item in staged if item[1] is not config_change]
         for temp_path, change in staged:
+            failed_path = change.path
             os.replace(temp_path, change.path)
     except BaseException as exc:
         _cleanup_staged(staged)
-        raise CaseInitializationApplyError("replace", change.path, exc) from exc
+        raise CaseInitializationApplyError("replace", failed_path, exc) from exc
     return tuple(change.path for change in changes)
+
+
+def _normalized_preview_text(data: bytes) -> str:
+    return data.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _resolved_case(workdir: Path) -> Path:

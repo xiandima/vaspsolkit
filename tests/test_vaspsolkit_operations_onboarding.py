@@ -22,9 +22,9 @@ def _write_case(root: Path, *, incar: str = "ENCUT = 450\nIBRION = 2\nNSW = 100\
         "TITEL = PAW_PBE O 01Jan2000\nENMAX = 400 eV\n",
         encoding="utf-8",
     )
-    (root / "vasp.pbs").write_text(
-        "#!/bin/bash\n#PBS -q normal\n#PBS -l nodes=1:ppn=48\n"
-        "#PBS -l walltime=48:00:00\nmpirun -np 48 vasp_std\n",
+    (root / "vasp.slurm").write_text(
+        "#!/bin/bash\n#SBATCH -p normal\n#SBATCH -N 1\n#SBATCH --ntasks=48\n"
+        "#SBATCH -t 48:00:00\nmpirun -np 48 vasp_std\n",
         encoding="utf-8",
     )
 
@@ -45,11 +45,11 @@ def test_snapshot_validates_inputs_and_exposes_real_summaries(tmp_path: Path) ->
     assert "ENMAX=400" in rows["POTCAR"].summary
     assert rows["KPOINTS"].status == "READY"
     assert "Gamma 1x1x1" in rows["KPOINTS"].summary
-    assert rows["vasp.pbs"].status == "READY"
-    assert "line-endings=Unix" in rows["vasp.pbs"].summary
-    assert "cores=48" in rows["vasp.pbs"].summary
-    assert "queue=normal" in rows["vasp.pbs"].summary
-    assert "walltime=48:00:00" in rows["vasp.pbs"].summary
+    assert rows["vasp.slurm"].status == "READY"
+    assert "line-endings=Unix" in rows["vasp.slurm"].summary
+    assert "tasks=48" in rows["vasp.slurm"].summary
+    assert "partition=normal" in rows["vasp.slurm"].summary
+    assert "walltime=48:00:00" in rows["vasp.slurm"].summary
 
 
 def test_snapshot_marks_missing_and_semantically_invalid_inputs(tmp_path: Path) -> None:
@@ -59,7 +59,7 @@ def test_snapshot_marks_missing_and_semantically_invalid_inputs(tmp_path: Path) 
         "POSCAR": b"Pt\n1\n",
         "POTCAR": b"\xff\xfe\x00bad",
         "KPOINTS": b"Gamma\n0\nGamma\n0 0 nope\n",
-        "vasp.pbs": b"#!/bin/bash\r\n#PBS -l nodes=1:ppn=48\r\n",
+        "vasp.slurm": b"#!/bin/bash\r\n#SBATCH -N 1\r\n",
     }
     for name, payload in corruptions.items():
         case = tmp_path / name.replace(".", "-")
@@ -74,10 +74,10 @@ def test_snapshot_marks_missing_and_semantically_invalid_inputs(tmp_path: Path) 
 
     missing = tmp_path / "missing-script"
     _write_case(missing)
-    (missing / "vasp.pbs").unlink()
+    (missing / "vasp.slurm").unlink()
     script = next(
         item for item in build_workbench_snapshot(missing).input_rows
-        if item.name == "vasp.pbs"
+        if item.name == "vasp.slurm"
     )
     assert script.status == "MISSING"
 
@@ -159,26 +159,25 @@ def test_snapshot_rejects_malformed_line_mode_and_tetrahedra_kpoints(tmp_path: P
         assert row.status == "ERROR"
 
 
-def test_pbs_requires_work_and_reports_unparsed_resources_as_unknown(tmp_path: Path) -> None:
+def test_slurm_requires_work_and_reports_unparsed_resources_as_unknown(tmp_path: Path) -> None:
     from vaspsolkit.config import KitConfig, SchedulerConfig, write_kit_config
     from vaspsolkit.operations.snapshot import build_workbench_snapshot
 
-    empty_case = tmp_path / "empty-pbs"
+    empty_case = tmp_path / "empty-slurm"
     _write_case(empty_case)
-    (empty_case / "vasp.pbs").write_text("#!/bin/bash\n# comment only\n", encoding="utf-8")
-    row = next(row for row in build_workbench_snapshot(empty_case).input_rows if row.name == "vasp.pbs")
+    (empty_case / "vasp.slurm").write_text("#!/bin/bash\n# comment only\n", encoding="utf-8")
+    row = next(row for row in build_workbench_snapshot(empty_case).input_rows if row.name == "vasp.slurm")
     assert row.status == "ERROR"
 
-    command_case = tmp_path / "command-pbs"
+    command_case = tmp_path / "command-slurm"
     _write_case(command_case)
-    (command_case / "vasp.pbs").write_text("#!/bin/bash\nmpirun vasp_std\n", encoding="utf-8")
-    write_kit_config(command_case / "vaspsolkit.json", KitConfig(scheduler=SchedulerConfig(queue="normal", cores=48, walltime="48:00:00")))
-    row = next(row for row in build_workbench_snapshot(command_case).input_rows if row.name == "vasp.pbs")
+    (command_case / "vasp.slurm").write_text("#!/bin/bash\nmpirun vasp_std\n", encoding="utf-8")
+    write_kit_config(command_case / "vaspsolkit.json", KitConfig(scheduler=SchedulerConfig(partition="normal", tasks=48, walltime="48:00:00")))
+    row = next(row for row in build_workbench_snapshot(command_case).input_rows if row.name == "vasp.slurm")
     assert row.status == "READY"
-    assert "queue=unknown" in row.summary
-    assert "cores=unknown" in row.summary
+    assert "partition=unknown" in row.summary
+    assert "tasks=unknown" in row.summary
     assert "walltime=unknown" in row.summary
-
 
 
 

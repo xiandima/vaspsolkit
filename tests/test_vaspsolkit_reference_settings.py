@@ -113,12 +113,12 @@ def test_init_explicit_reference_reaches_existing_incar_fast_path(tmp_path) -> N
     (tmp_path / "INCAR").write_text(
         "ENCUT = 450\nIBRION = 1\nNSW = 50\n", encoding="utf-8"
     )
-    (tmp_path / "vasp.pbs").write_text("#!/bin/bash\n", encoding="utf-8")
+    (tmp_path / "vasp.slurm").write_text("#!/bin/bash\n", encoding="utf-8")
 
     assert main(
         [
-            "init", "--workdir", str(tmp_path), "--scheduler", "pbs",
-            "--script", "vasp.pbs", "--she-reference", "4.44",
+            "init", "--workdir", str(tmp_path), "--scheduler", "slurm",
+            "--script", "vasp.slurm", "--she-reference", "4.44",
             "--she-reference-source", "DOI:example", "--yes",
         ],
         input_fn=lambda prompt: (_ for _ in ()).throw(AssertionError(prompt)),
@@ -143,7 +143,39 @@ def test_configure_reference_explicitly_updates_only_reference_fields(tmp_path) 
     assert config.workflow.she_reference == 4.44
     assert config.workflow.she_reference_source == "DOI:example"
     assert config.workflow.she_reference_confirmed is True
-    assert config.scheduler.cores == 48
+    assert config.scheduler.tasks == 96
+
+
+def test_configure_reference_preserves_concurrent_valid_update(tmp_path, monkeypatch) -> None:
+    from vaspsolkit import cli as cli_module
+    from vaspsolkit.cli import main
+    from vaspsolkit.config import KitConfig, load_kit_config, write_kit_config
+
+    path = tmp_path / "vaspsolkit.json"
+    write_kit_config(path, KitConfig())
+    real_write = cli_module.write_kit_config
+    concurrent = KitConfig()
+    concurrent.scheduler.partition = "concurrent"
+
+    def interleaved_write(target, config, **kwargs):
+        real_write(target, concurrent)
+        return real_write(target, config, **kwargs)
+
+    monkeypatch.setattr(cli_module, "write_kit_config", interleaved_write)
+
+    with pytest.raises(RuntimeError, match="changed"):
+        main(
+            [
+                "configure-reference",
+                "--workdir",
+                str(tmp_path),
+                "--she-reference",
+                "4.44",
+                "--yes",
+            ]
+        )
+
+    assert load_kit_config(path).scheduler.partition == "concurrent"
 
 
 def test_reference_freshness_distinguishes_missing_current_stale_and_unknown(tmp_path) -> None:
@@ -228,7 +260,7 @@ def test_postprocess_menu_is_blocked_for_stale_reference_summary(tmp_path) -> No
     from vaspsolkit.interactive_menu import action_availability
     from vaspsolkit.menu_actions import action_by_code
 
-    for name in ("POSCAR", "INCAR", "KPOINTS", "POTCAR", "vasp.pbs"):
+    for name in ("POSCAR", "INCAR", "KPOINTS", "POTCAR", "vasp.slurm"):
         (tmp_path / name).write_text("input\n")
     write_kit_config(tmp_path / "vaspsolkit.json", KitConfig(workflow=WorkflowConfig(she_reference_confirmed=True)))
     summary = tmp_path / "results" / "summary.csv"

@@ -8,18 +8,18 @@ from unittest.mock import patch
 
 
 class GuideModelTests(unittest.TestCase):
-    def _write_base_inputs(self, root: Path, script: str = "vasp.pbs") -> None:
+    def _write_base_inputs(self, root: Path, script: str = "vasp.slurm") -> None:
         for name in ("POSCAR", "INCAR", "KPOINTS", "POTCAR", script):
             (root / name).write_text("input\n", encoding="utf-8")
 
-    def _write_config(self, root: Path, script: str = "vasp.pbs") -> None:
+    def _write_config(self, root: Path, script: str = "vasp.slurm") -> None:
         from vaspsolkit.config import KitConfig, SchedulerConfig, WorkflowConfig, write_kit_config
 
         write_kit_config(
             root / "vaspsolkit.json",
             KitConfig(
                 workflow=WorkflowConfig(she_reference_confirmed=True),
-                scheduler=SchedulerConfig(kind="pbs", script=script, nodes=["node27.example.invalid"]),
+                scheduler=SchedulerConfig(kind="slurm", script=script, nodes=["node27.example.invalid"]),
             ),
         )
 

@@ -17,7 +17,7 @@ def _neutral_case(root: Path) -> None:
         "LOCPOT": "neutral locpot\n",
         "OUTCAR": "neutral outcar\n",
         "WAVECAR": "must not be copied\n",
-        "vasp.pbs": "#!/bin/bash\n#PBS -l nodes=1:ppn=48\nmpirun vasp_std\n",
+        "vasp.slurm": "#!/bin/bash\n#SLURM -l nodes=1:ppn=48\nmpirun vasp_std\n",
     }.items():
         (root / name).write_text(text, encoding="utf-8")
     config = KitConfig(
@@ -27,7 +27,7 @@ def _neutral_case(root: Path) -> None:
             nelect_ref=10.0,
             charge_points_include_neutral=False,
         ),
-        scheduler=SchedulerConfig(kind="pbs", script="vasp.pbs"),
+        scheduler=SchedulerConfig(kind="slurm", script="vasp.slurm"),
     )
     write_kit_config(root / "vaspsolkit.json", config)
     WorkflowState(

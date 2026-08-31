@@ -20,7 +20,7 @@ def _write_base_inputs(root: Path) -> None:
         "TITEL = PAW_PBE O 01Jan2000\nENMAX = 400 eV\n",
         encoding="utf-8",
     )
-    (root / "vasp.pbs").write_text("#!/bin/sh\n", encoding="utf-8")
+    (root / "vasp.slurm").write_text("#!/bin/sh\n", encoding="utf-8")
 
 
 def _write_config(root: Path) -> None:
@@ -46,10 +46,10 @@ def _resources():
     return ResourceRequest.create(
         allocation="specified",
         nodes=(" node03 ", "node03"),
-        cores=32,
-        queue="workq",
+        tasks=32,
+        partition="workq",
         walltime="100:05:09",
-        script="vasp.pbs",
+        script="vasp.slurm",
         persist=True,
     )
 
@@ -58,35 +58,35 @@ def test_resource_request_normalizes_specified_nodes_and_is_frozen():
     from vaspsolkit.operations.actions import ResourceRequest
 
     resources = ResourceRequest.create(
-        allocation="specified", nodes=(" node03 ", "node03"), cores=32,
-        queue="workq", walltime="100:05:09", script="vasp.pbs", persist=True,
+        allocation="specified", nodes=(" node03 ", "node03"), tasks=32,
+        partition="workq", walltime="100:05:09", script="vasp.slurm", persist=True,
     )
 
     assert resources.nodes == ("node03",)
     assert resources.walltime == "100:05:09"
     assert resources.validate() is None
     with pytest.raises(dataclasses.FrozenInstanceError):
-        resources.cores = 64
+        resources.tasks = 64
 
 
-def test_resource_request_allows_cluster_default_queue():
+def test_resource_request_uses_explicit_partition():
     from vaspsolkit.operations.actions import ResourceRequest
 
     request = ResourceRequest.create(
-        allocation="auto", nodes=(), cores=48, queue="",
-        walltime="48:00:00", script="vasp.pbs",
+        allocation="auto", nodes=(), tasks=48, partition="compute",
+        walltime="48:00:00", script="vasp.slurm",
     )
 
-    assert request.queue == ""
+    assert request.partition == "compute"
 
 
-def test_resource_request_rejects_more_than_one_named_node():
+def test_resource_request_rejects_node_count_mismatch():
     from vaspsolkit.operations.actions import ResourceRequest
 
-    with pytest.raises(ValueError, match="one|single|一个|单个"):
+    with pytest.raises(ValueError, match="node_count"):
         ResourceRequest.create(
-            allocation="specified", nodes=("node03", "node05"), cores=48,
-            queue="", walltime="48:00:00", script="vasp.pbs",
+            allocation="specified", nodes=("node03", "node05"), tasks=48,
+            partition="compute", walltime="48:00:00", script="vasp.slurm",
         )
 
 
@@ -96,8 +96,8 @@ def test_resource_request_rejects_more_than_one_named_node():
         {"allocation": 1},
         {"nodes": ["node01"]},
         {"nodes": (1,)},
-        {"cores": "48"},
-        {"queue": None},
+        {"tasks": "48"},
+        {"partition": None},
         {"walltime": 48},
         {"script": object()},
         {"persist": 1},
@@ -109,10 +109,10 @@ def test_resource_request_direct_constructor_rejects_wrong_types(overrides):
     values = dict(
         allocation="specified",
         nodes=("node01",),
-        cores=48,
-        queue="workq",
+        tasks=48,
+        partition="workq",
         walltime="48:00:00",
-        script="vasp.pbs",
+        script="vasp.slurm",
         persist=False,
     )
     values.update(overrides)
@@ -127,23 +127,23 @@ def test_resource_request_direct_constructor_normalizes_but_rejects_empty_node()
     request = ResourceRequest(
         allocation="specified",
         nodes=(" node01 ", "node01"),
-        cores=48,
-        queue=" workq ",
+        tasks=48,
+        partition=" workq ",
         walltime="48:00:00",
-        script=" vasp.pbs ",
+        script=" vasp.slurm ",
     )
     assert request.nodes == ("node01",)
-    assert request.queue == "workq"
-    assert request.script == "vasp.pbs"
+    assert request.partition == "workq"
+    assert request.script == "vasp.slurm"
 
     with pytest.raises(ValueError, match="nodes"):
         ResourceRequest(
             allocation="specified",
             nodes=("node01", "  "),
-            cores=48,
-            queue="workq",
+            tasks=48,
+            partition="workq",
             walltime="48:00:00",
-            script="vasp.pbs",
+            script="vasp.slurm",
         )
 
 
@@ -153,7 +153,7 @@ def test_resource_request_direct_constructor_normalizes_but_rejects_empty_node()
         ({"allocation": "manual"}, "allocation"),
         ({"allocation": "specified", "nodes": ()}, "nodes"),
         ({"allocation": "auto", "nodes": ("node01",)}, "nodes"),
-        ({"cores": 0}, "cores"),
+        ({"tasks": 0}, "task"),
         ({"script": ""}, "script"),
         ({"walltime": "2:60:00"}, "walltime"),
         ({"walltime": "02:10"}, "walltime"),
@@ -165,10 +165,10 @@ def test_resource_request_rejects_invalid_values(kwargs, message):
     values = dict(
         allocation="auto",
         nodes=(),
-        cores=48,
-        queue="workq",
+        tasks=48,
+        partition="workq",
         walltime="48:00:00",
-        script="vasp.pbs",
+        script="vasp.slurm",
     )
     values.update(kwargs)
 
@@ -195,7 +195,7 @@ def test_action_plan_requires_resolved_case_and_valid_action_effect(tmp_path):
     with pytest.raises(ValueError, match="resolved"):
         ActionPlan(**{**values, "target_case": tmp_path / ".." / tmp_path.name})
     with pytest.raises(ValueError, match="action"):
-        ActionPlan(**{**values, "action_id": "qsub-everything"})
+        ActionPlan(**{**values, "action_id": "sbatch-everything"})
     with pytest.raises(ValueError, match="effect"):
         ActionPlan(**{**values, "effect": "destructive"})
 
@@ -240,7 +240,7 @@ def test_action_plan_deep_freezes_sequence_inputs(tmp_path):
 
     jobs = ["neutral"]
     diffs = [FileDiff((tmp_path / "INCAR").resolve(), "old", "new", "modify")]
-    commands = ["qsub × 1"]
+    commands = ["sbatch × 1"]
     warnings = ["preview only"]
     plan = ActionPlan(
         action_id="submit-neutral",
@@ -260,7 +260,7 @@ def test_action_plan_deep_freezes_sequence_inputs(tmp_path):
 
     assert plan.target_jobs == ("neutral",)
     assert len(plan.file_diffs) == 1
-    assert plan.commands_summary == ("qsub × 1",)
+    assert plan.commands_summary == ("sbatch × 1",)
     assert plan.warnings == ("preview only",)
 
 
@@ -350,7 +350,7 @@ def test_file_diff_rejects_malformed_fields(overrides):
         FileDiff(**values)
 
 
-@pytest.mark.parametrize("script", ("/tmp/vasp.pbs", "../vasp.pbs", "jobs/../../vasp.pbs"))
+@pytest.mark.parametrize("script", ("/tmp/vasp.slurm", "../vasp.slurm", "jobs/../../vasp.slurm"))
 def test_resource_request_rejects_script_outside_case(script):
     from vaspsolkit.operations.actions import ResourceRequest
 
@@ -358,8 +358,8 @@ def test_resource_request_rejects_script_outside_case(script):
         ResourceRequest(
             allocation="auto",
             nodes=(),
-            cores=48,
-            queue="workq",
+            tasks=48,
+            partition="workq",
             walltime="48:00:00",
             script=script,
         )
@@ -401,7 +401,7 @@ def test_submit_neutral_plan_preserves_resources_when_prepared(tmp_path):
     assert plan.action_id == "submit-neutral"
     assert plan.target_case == tmp_path.resolve()
     assert plan.target_jobs == ("neutral",)
-    assert plan.commands_summary == ("qsub × 1",)
+    assert plan.commands_summary == ("sbatch × 1",)
     assert plan.scheduler_request is resources
     assert plan.blocked_reason == ""
 
@@ -527,8 +527,8 @@ def test_submit_neutral_rejects_script_symlink_outside_case(tmp_path):
     resources = ResourceRequest(
         allocation="auto",
         nodes=(),
-        cores=48,
-        queue="workq",
+        tasks=48,
+        partition="workq",
         walltime="48:00:00",
         script="linked.pbs",
     )
