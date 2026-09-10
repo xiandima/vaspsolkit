@@ -12,6 +12,9 @@
     "charge_points_include_neutral": true,
     "vacuum_level_reference": "neutral",
     "she_reference": 4.7,
+    "she_reference_source": "",
+    "she_reference_confirmed": false,
+    "method_fingerprint": "",
     "interface_count": 1,
     "target_potentials": [0.0, 0.4]
   },

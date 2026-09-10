@@ -66,23 +66,16 @@ def postprocess_versioned(
             allow_excluded=allow_excluded,
         )
         analysis = json.loads(generated.analysis_path.read_text(encoding="utf-8"))
-        source_rows = read_summary(summary_copy)
-        reference_values = {row.get("she_reference_eV", "") for row in source_rows}
-        reference_sources = {row.get("she_reference_source", "") for row in source_rows}
-        reference_known = len(reference_values) == 1 and len(reference_sources) == 1 and "" not in reference_values
-        reference_value = float(next(iter(reference_values))) if reference_known else None
-        reference_source = next(iter(reference_sources)) if reference_known else ""
+        reference_value = analysis["provenance"]["she_reference_eV"]
+        reference_source = analysis["provenance"]["she_reference_source"] or ""
         created_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        analysis["provenance"] = {
+        analysis["provenance"].update({
             "run_id": run_id,
             "created_at": created_at,
             "source_summary": str(summary_path.resolve()),
             "summary_sha256": summary_digest,
             "point_count": generated.point_count,
-            "she_reference_eV": reference_value,
-            "she_reference_source": reference_source,
-            "she_reference_status": "recorded" if reference_known else "unknown",
-        }
+        })
         generated.analysis_path.write_text(
             json.dumps(analysis, indent=2, sort_keys=True),
             encoding="utf-8",
@@ -132,6 +125,7 @@ def postprocess_summary(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     analysis = analyze_rows(rows)
+    analysis["provenance"] = _scientific_provenance(rows, analysis)
     analysis_path = output_dir / "analysis.json"
     write_analysis(analysis_path, analysis)
     curve_path = output_dir / "eu_curve.csv"
@@ -190,9 +184,10 @@ def _plot_eu(path: Path, rows: List[Dict[str, object]], analysis: Dict[str, obje
 
     fig, ax = plt.subplots(figsize=(7.0, 5.0))
     ax.plot(curve_x, curve_y, color="#176B87", linewidth=2.2, label="quadratic fit")
-    ax.scatter(included_x, included_y, color="#64B5D9", edgecolor="white", linewidth=0.7, s=55, zorder=3, label="five points")
+    ax.scatter(included_x, included_y, color="#64B5D9", edgecolor="white", linewidth=0.7, s=55, zorder=3, label=f"included ({len(included_x)}/{len(rows)})")
     if excluded_x:
-        ax.scatter(excluded_x, excluded_y, marker="x", color="#D84A3A", s=65, zorder=4, label="excluded")
+        names = ", ".join(str(row.get("folder", "?")) for row in rows if not _included(row))
+        ax.scatter(excluded_x, excluded_y, marker="x", color="#D84A3A", s=65, zorder=4, label=f"excluded: {names}")
     ax.set_xlabel("U / V vs. SHE", fontsize=13)
     ax.set_ylabel("E(U) / eV", fontsize=13)
     ax.tick_params(labelsize=11, direction="in")
@@ -202,7 +197,7 @@ def _plot_eu(path: Path, rows: List[Dict[str, object]], analysis: Dict[str, obje
     ax.text(
         0.03,
         0.97,
-        f"$R^2$ = {fit['r_squared']:.5f}\n$U_0$ = {fit['u0']:.4f} V",
+        f"$R^2$ = {fit['r_squared']:.5f}\n$U_{{vertex}}$ = {fit['u_vertex']:.4f} V",
         transform=ax.transAxes,
         va="top",
         fontsize=10,
@@ -247,7 +242,9 @@ def _write_report(path: Path, rows, analysis, excluded) -> None:
         f"- Raw points: {len(rows)}",
         f"- Fitted points: {len(analysis['points'])}",
         f"- Excluded points: {len(excluded)}",
-        f"- U0 / PZC: {fit['u0']:.6f} V vs. SHE",
+        "- Excluded folders: " + (", ".join(str(row.get("folder", "?")) for row in excluded) or "none"),
+        f"- Quadratic vertex U: {fit['u_vertex']:.6f} V vs. SHE",
+        f"- PZC from charge fit: {_pzc_text(analysis)}",
         f"- R2: {fit['r_squared']:.8f}",
         f"- RMSE: {fit['rmse']:.8f} eV",
         f"- Maximum absolute residual: {fit['max_abs_residual']:.8f} eV",
@@ -256,6 +253,45 @@ def _write_report(path: Path, rows, analysis, excluded) -> None:
         "",
     ]
     path.write_text("\n".join(text), encoding="utf-8")
+
+
+def _pzc_text(analysis: Dict[str, object]) -> str:
+    estimate = analysis.get("pzc_estimate")
+    if not isinstance(estimate, dict) or estimate.get("value") is None:
+        return "not assigned"
+    suffix = "inside fitted domain" if estimate.get("within_fit_domain") else "outside fitted domain"
+    return f"{float(estimate['value']):.6f} V vs. SHE ({suffix})"
+
+
+def _common_nonempty(rows: List[Dict[str, object]], key: str) -> Optional[str]:
+    values = {str(row.get(key, "")).strip() for row in rows}
+    if len(values) != 1 or "" in values:
+        return None
+    return next(iter(values))
+
+
+def _scientific_provenance(
+    rows: List[Dict[str, object]],
+    analysis: Dict[str, object],
+) -> Dict[str, object]:
+    reference_text = _common_nonempty(rows, "she_reference_eV")
+    reference_source = _common_nonempty(rows, "she_reference_source")
+    reference_value = float(reference_text) if reference_text is not None else None
+    return {
+        "she_reference_eV": reference_value,
+        "she_reference_source": reference_source,
+        "she_reference_status": (
+            "recorded" if reference_value is not None and reference_source is not None else "unknown"
+        ),
+        "potential_convention": "vacuum-reference-vs-she",
+        "energy_convention": (
+            "toten-minus-delta-electrons-times-efermi"
+            if analysis.get("energy_key") == "energy_at_potential"
+            else "raw-toten"
+        ),
+        "fermi_shift_handling": "not-applied",
+        "method_fingerprint": _common_nonempty(rows, "method_fingerprint"),
+    }
 
 
 def _included(row: Dict[str, object]) -> bool:

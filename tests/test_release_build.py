@@ -51,6 +51,10 @@ def test_release_manifest_excludes_archived_ui() -> None:
     assert "docs/UI_GUIDE_zh.md" not in manifest
     assert "vaspsolkit/workbench/styles" not in manifest
     assert "tools/build_release.py" in manifest
+    assert "include CHANGELOG.md" in manifest
+    assert "recursive-include docs *.md" in manifest
+    assert "recursive-include templates *.sh" in manifest
+    assert "recursive-include examples *.json *.md" in manifest
 
 
 def test_formal_sources_include_menu_operations_and_exclude_ui_runtime() -> None:

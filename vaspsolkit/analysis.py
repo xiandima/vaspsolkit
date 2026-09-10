@@ -30,6 +30,11 @@ def analyze_rows(
         "excluded_points": excluded_rows,
         "energy_key": energy_key,
         "energy_fit": energy_fit,
+        "fit_domain": {
+            "u_min": min(row["u_vs_she"] for row in numeric_rows),
+            "u_max": max(row["u_vs_she"] for row in numeric_rows),
+            "point_count": len(numeric_rows),
+        },
         "targets": [],
     }
     if target_potentials:
@@ -41,11 +46,21 @@ def analyze_rows(
             for u in target_potentials
         ]
     if all("electrode_charge_e" in row for row in numeric_rows) and len(numeric_rows) >= 2:
-        result["charge_fit"] = fit_polynomial(
+        charge_fit = fit_polynomial(
             [row["u_vs_she"] for row in numeric_rows],
             [row["electrode_charge_e"] for row in numeric_rows],
             degree=1,
         )
+        result["charge_fit"] = charge_fit
+        slope = charge_fit["slope"]
+        if slope != 0.0:
+            pzc = -charge_fit["intercept"] / slope
+            domain = result["fit_domain"]
+            result["pzc_estimate"] = {
+                "value": pzc,
+                "basis": "linear-charge-zero",
+                "within_fit_domain": domain["u_min"] <= pzc <= domain["u_max"],
+            }
     return result
 
 
@@ -127,7 +142,7 @@ def thermodynamic_potential_rows(rows: Sequence[Dict[str, object]]) -> List[Dict
 def fit_energy_vs_potential(
     rows: Sequence[Dict[str, float]],
     energy_key: Optional[str] = None,
-) -> Dict[str, float]:
+) -> Dict[str, object]:
     if len(rows) < 3:
         raise ValueError("at least three points are required for quadratic energy fitting")
     energy_key = energy_key or _energy_key(rows)
@@ -142,8 +157,8 @@ def fit_energy_vs_potential(
     b = coeffs["b"]
     c = coeffs["c"]
     capacitance = -2.0 * a
-    u0 = -b / (2.0 * a) if a != 0 else float("nan")
-    e0 = c + 0.5 * capacitance * (u0**2) if a != 0 else float("nan")
+    u_vertex = -b / (2.0 * a) if a != 0 else float("nan")
+    e0 = c + 0.5 * capacitance * (u_vertex**2) if a != 0 else float("nan")
     fit_quality = _fit_quality(xs, ys, [evaluate_quadratic(a, b, c, x) for x in xs])
     return {
         "energy_key": energy_key,
@@ -151,8 +166,10 @@ def fit_energy_vs_potential(
         "b": b,
         "c": c,
         "capacitance": capacitance,
-        "u0": u0,
-        "pzc": u0,
+        "u_vertex": u_vertex,
+        "u0": u_vertex,
+        "pzc": None,
+        "pzc_basis": "unassigned",
         "e0": e0,
         **fit_quality,
     }

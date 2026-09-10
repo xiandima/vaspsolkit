@@ -1,5 +1,9 @@
 include README.md
+include CHANGELOG.md
 include LICENSE
 include pyproject.toml
 include tools/build_release.py
+recursive-include docs *.md
+recursive-include templates *.sh
+recursive-include examples *.json *.md
 prune archive

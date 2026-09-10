@@ -12,11 +12,19 @@ def _has_forbidden_release_content(content: bytes) -> bool:
 
 def test_default_slurm_template_is_portable() -> None:
     text = Path("templates/slurm.vasp.sh").read_text(encoding="utf-8")
-    assert "#SBATCH --partition=compute" in text
-    assert "#SBATCH --ntasks=96" in text
+    assert "#SBATCH --partition=" not in text
+    assert "#SBATCH --ntasks=" not in text
+    assert "#SBATCH --error=" in text
     assert "--nodelist" not in text
     assert "/opt/" + "modules" not in text
     assert "vasp_std" in text and "vasp_gam" not in text
+
+
+def test_manual_template_has_no_shell_redirection_placeholders() -> None:
+    text = Path("templates/manual.submit.sh").read_text(encoding="utf-8")
+    assert "<vasp-module>" not in text
+    assert "<total-mpi-ranks>" not in text
+    assert "<vasp-executable>" not in text
 
 
 def test_default_configuration_uses_slurm_local_server_profile() -> None:

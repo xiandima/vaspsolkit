@@ -12,7 +12,8 @@ Thank you for improving VASPsolKit.
    python -m pytest -q
    ```
 
-4. Keep PBS and Slurm behavior explicit. A scheduler action must never cancel a running job without a separate, deliberate feature and confirmation flow.
+4. Keep SLURM and custom-scheduler behavior explicit. Legacy PBS input is migration-only; do not reintroduce a built-in PBS runtime.
+5. A scheduler action must never cancel a running job without a separate, deliberate feature and confirmation flow.
 
 ## Scope
 

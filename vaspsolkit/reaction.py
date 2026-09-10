@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import csv
 import json
+import math
 import operator
 import os
 import tempfile
@@ -41,10 +42,12 @@ def run_reaction_spec(spec_path: Path, output_dir: Path) -> ReactionOutputs:
     spec_path = Path(spec_path)
     spec = json.loads(spec_path.read_text(encoding="utf-8"))
     fits: Dict[str, Dict[str, float]] = {}
+    analyses: Dict[str, Dict[str, object]] = {}
     for name, source in spec.get("systems", {}).items():
         data = json.loads((spec_path.parent / source).read_text(encoding="utf-8"))
         fit = data.get("energy_fit", data)
         fits[name] = {key: float(fit[key]) for key in ("a", "b", "c")}
+        analyses[name] = data
     constants = {name: float(value) for name, value in spec.get("constants", {}).items()}
     curves = spec.get("curves", [])
     if not fits or not curves:
@@ -53,8 +56,9 @@ def run_reaction_spec(spec_path: Path, output_dir: Path) -> ReactionOutputs:
     u_min = float(grid.get("u_min", -1.5))
     u_max = float(grid.get("u_max", 0.5))
     count = int(grid.get("points", 301))
-    if count < 2 or u_max <= u_min:
+    if count < 2 or not all(math.isfinite(u) for u in (u_min, u_max)) or u_max <= u_min:
         raise ValueError("reaction grid requires points >= 2 and u_max > u_min")
+    compatibility = _validate_compatibility(analyses, spec, u_min=u_min, u_max=u_max)
     potentials = [u_min + (u_max - u_min) * index / (count - 1) for index in range(count)]
     values = {
         curve["name"]: [evaluate_formula(curve["formula"], fits, constants, u) for u in potentials]
@@ -73,12 +77,135 @@ def run_reaction_spec(spec_path: Path, output_dir: Path) -> ReactionOutputs:
     plot_path = output_dir / "reaction_curves.png"
     _plot_reaction(plot_path, potentials, values, spec)
     report_path = output_dir / "reaction_report.md"
-    lines = [f"# {spec.get('name', 'Reaction')} reaction report", ""]
+    lines = [
+        f"# {spec.get('name', 'Reaction')} reaction report",
+        "",
+        "- Compatibility checks: " + (
+            "overrides enabled; not a strict compatibility pass"
+            if compatibility["overrides"] else "passed (metadata and requested grid only)"
+        ),
+        "- Enabled overrides: " + (", ".join(compatibility["overrides"]) or "none"),
+        f"- Requested grid: {u_min:.6f} to {u_max:.6f} V vs. SHE ({count} samples)",
+        "- Quantity: Electronic energy expression; it is not labelled Gibbs free energy unless the constants and source analyses explicitly include all corrections.",
+        "- Scope: matching metadata does not verify input files, structures, thermochemical constants, or transformed E(system, U) arguments.",
+    ]
+    if compatibility["domain_complete"]:
+        lines.append(f"- Common fitted domain: {compatibility['u_min']:.6f} to {compatibility['u_max']:.6f} V vs. SHE")
+    else:
+        lines.append("- Common fitted domain: unknown (one or more systems lack a domain)")
+        if compatibility["domains"]:
+            lines.append(f"- Intersection of known domains only: {compatibility['u_min']:.6f} to {compatibility['u_max']:.6f} V vs. SHE")
+    lines.extend(f"- Warning: {warning}" for warning in compatibility["warnings"])
+    lines.extend(["", "## Inputs", "", f"- Spec: `{spec_path.resolve()}`"])
+    for name, source in spec["systems"].items():
+        lines.append(f"- `{name}`: `{(spec_path.parent / source).resolve()}`")
+        lines.append(f"  - Metadata: `{json.dumps(analyses[name].get('provenance'), sort_keys=True)}`")
+        lines.append(f"  - Fitted domain: `{json.dumps(analyses[name].get('fit_domain'), sort_keys=True)}`")
+    lines.extend(["", "## Constants", ""])
+    lines.extend(f"- `{name}` = {value:.12g}" for name, value in constants.items())
+    if not constants:
+        lines.append("- none")
+    lines.extend(["", "## Formulas", ""])
     for curve in curves:
         lines.append(f"- `{curve['name']}`: `{curve['formula']}`")
     lines.extend(["", "![Reaction curves](reaction_curves.png)", ""])
     report_path.write_text("\n".join(lines), encoding="utf-8")
     return ReactionOutputs(csv_path, plot_path, report_path)
+
+
+_PROVENANCE_KEYS = (
+    "she_reference_eV",
+    "potential_convention",
+    "energy_convention",
+    "fermi_shift_handling",
+    "method_fingerprint",
+)
+
+
+def _validate_compatibility(analyses, spec, *, u_min: float, u_max: float):
+    options = spec.get("compatibility", {})
+    if not isinstance(options, dict):
+        raise ValueError("reaction compatibility must be an object")
+    allow_unknown = _option_bool(options, "allow_unknown_provenance", False)
+    allow_mixed = _option_bool(options, "allow_mixed_provenance", False)
+    allow_extrapolation = _option_bool(options, "allow_extrapolation", False)
+
+    signatures = {}
+    domains = {}
+    warnings = []
+    for name, analysis in analyses.items():
+        provenance = analysis.get("provenance")
+        domain = analysis.get("fit_domain")
+        if not isinstance(provenance, dict):
+            if not allow_unknown:
+                raise ValueError(
+                    f"reaction system {name!r} has unknown provenance or fitted potential domain; "
+                    "regenerate analysis.json or explicitly allow legacy provenance"
+                )
+            provenance = {}
+        missing = [key for key in _PROVENANCE_KEYS if provenance.get(key) in (None, "")]
+        if missing and not allow_unknown:
+            raise ValueError(
+                f"reaction system {name!r} provenance is missing: {', '.join(missing)}"
+            )
+        if missing:
+            warnings.append(f"{name}: unknown provenance fields: {', '.join(missing)}")
+        signatures[name] = {key: provenance.get(key) for key in _PROVENANCE_KEYS}
+        if domain is None:
+            if not allow_unknown:
+                raise ValueError(f"reaction system {name!r} has an unknown fitted potential domain")
+            warnings.append(f"{name}: unknown fitted potential domain")
+            continue
+        try:
+            bounds = (float(domain["u_min"]), float(domain["u_max"]))
+            if not all(math.isfinite(u) for u in bounds) or bounds[0] > bounds[1]:
+                raise ValueError("nonfinite or reversed domain")
+            domains[name] = bounds
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"reaction system {name!r} has an invalid fitted potential domain") from exc
+
+    for key in _PROVENANCE_KEYS:
+        known = [(name, signature[key]) for name, signature in signatures.items() if signature[key] not in (None, "")]
+        if not known:
+            continue
+        first_name, reference = known[0]
+        for name, value in known[1:]:
+            if value != reference:
+                message = f"reaction systems {first_name!r} and {name!r} have incompatible {key}"
+                if not allow_mixed:
+                    raise ValueError(message)
+                warnings.append(message)
+
+    if domains:
+        common_min = max(domain[0] for domain in domains.values())
+        common_max = min(domain[1] for domain in domains.values())
+        if common_min > common_max:
+            raise ValueError("reaction systems have no common fitted potential domain")
+        if u_min < common_min or u_max > common_max:
+            message = "reaction grid is outside the common fitted potential domain " + f"[{common_min:g}, {common_max:g}] V vs. SHE"
+            if not allow_extrapolation:
+                raise ValueError(message)
+            warnings.append(message)
+    elif not allow_unknown:
+        raise ValueError("reaction systems do not provide fitted potential domains")
+    else:
+        common_min = common_max = None
+
+    return {
+        "u_min": common_min,
+        "u_max": common_max,
+        "domains": domains,
+        "domain_complete": len(domains) == len(analyses),
+        "overrides": [key for key in ("allow_unknown_provenance", "allow_mixed_provenance", "allow_extrapolation") if options.get(key, False)],
+        "warnings": warnings,
+    }
+
+
+def _option_bool(options, key: str, default: bool) -> bool:
+    value = options.get(key, default)
+    if type(value) is not bool:
+        raise ValueError(f"reaction compatibility.{key} must be a boolean")
+    return value
 
 
 def _evaluate_node(node, fits, constants, potential):
@@ -128,7 +255,7 @@ def _plot_reaction(path: Path, potentials, values, spec) -> None:
     for name, series in values.items():
         ax.plot(potentials, series, linewidth=2.0, label=name)
     ax.set_xlabel(spec.get("plot", {}).get("xlabel", "U / V vs. SHE"), fontsize=13)
-    ax.set_ylabel(spec.get("plot", {}).get("ylabel", "Free energy / eV"), fontsize=13)
+    ax.set_ylabel(spec.get("plot", {}).get("ylabel", "Electronic energy expression / eV"), fontsize=13)
     ax.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
     ax.tick_params(labelsize=11, direction="in")
     ax.legend(frameon=False, fontsize=10, loc="best")

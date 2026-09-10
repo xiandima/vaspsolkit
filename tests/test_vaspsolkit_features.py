@@ -618,6 +618,7 @@ class VaspsolkitPostprocessTests(unittest.TestCase):
                         "constants": {"G_A": -0.5},
                         "curves": [{"name": "A adsorption", "formula": "E(\"star_A\", U) - E(\"slab\", U) - G_A"}],
                         "grid": {"u_min": -1.0, "u_max": 1.0, "points": 5},
+                        "compatibility": {"allow_unknown_provenance": True},
                     }
                 ),
                 encoding="utf-8",

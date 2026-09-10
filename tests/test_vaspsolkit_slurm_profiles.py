@@ -407,11 +407,12 @@ def test_portable_slurm_template_has_no_site_specific_values() -> None:
     ).read_text(encoding="utf-8")
 
     assert template.startswith("#!/bin/bash\n")
-    assert "#SBATCH --partition=compute" in template
-    assert "#SBATCH --nodes=1" in template
-    assert "#SBATCH --ntasks=96" in template
-    assert "#SBATCH --ntasks-per-node=96" in template
-    assert "#SBATCH --time=72:00:00" in template
+    assert "#SBATCH --partition=" not in template
+    assert "#SBATCH --nodes=" not in template
+    assert "#SBATCH --ntasks=" not in template
+    assert "#SBATCH --ntasks-per-node=" not in template
+    assert "#SBATCH --time=" not in template
+    assert "#SBATCH --error=" in template
     assert "nodelist" not in template.lower()
     assert "module load" not in template
     assert "source /" not in template
@@ -420,3 +421,12 @@ def test_portable_slurm_template_has_no_site_specific_values() -> None:
     assert (
         'mpirun -np "${SLURM_NTASKS}" vasp_std > vasp.log 2>&1' in template
     )
+
+
+def test_portable_template_resource_rewrite_launches_vasp_only_once() -> None:
+    template = (Path(__file__).parents[1] / "templates" / "slurm.vasp.sh").read_text()
+    rewritten = rewrite_slurm_resources(template, _profile())
+    launch_lines = [line for line in rewritten.splitlines() if line.startswith("mpirun ")]
+    assert len(launch_lines) == 1
+    assert launch_lines[0].endswith("vasp_std > vasp.log 2>&1")
+    assert rewrite_slurm_resources(rewritten, _profile()) == rewritten

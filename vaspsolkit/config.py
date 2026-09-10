@@ -102,6 +102,7 @@ class WorkflowConfig:
     she_reference: float = 4.70
     she_reference_source: str = ""
     she_reference_confirmed: bool = False
+    method_fingerprint: str = ""
     interface_count: int = 1
     target_potentials: List[float] = field(default_factory=list)
     nelect_ref: Optional[float] = None
@@ -156,6 +157,7 @@ class WorkflowConfig:
             "results_root",
             "vacuum_level_reference",
             "she_reference_source",
+            "method_fingerprint",
             "job_state_file",
             "summary_file",
             "analysis_file",

@@ -322,6 +322,7 @@ def _collect_charge_row(
             charge.delta_electrons,
             outcar.efermi,
         ),
+        "method_fingerprint": config.method_fingerprint,
         **summary_reference_fields(config),
     }
 

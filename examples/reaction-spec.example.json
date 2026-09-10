@@ -1,8 +1,8 @@
 {
   "name": "example reaction",
   "systems": {
-    "slab": "../systems/slab/results/analysis.json",
-    "star_A": "../systems/star_A/results/analysis.json"
+    "slab": "../systems/slab/results/eu/analysis.json",
+    "star_A": "../systems/star_A/results/eu/analysis.json"
   },
   "constants": {
     "G_A": -0.5
@@ -14,12 +14,17 @@
     }
   ],
   "grid": {
-    "u_min": -1.5,
+    "u_min": -1.0,
     "u_max": 0.5,
     "points": 301
   },
+  "compatibility": {
+    "allow_unknown_provenance": false,
+    "allow_mixed_provenance": false,
+    "allow_extrapolation": false
+  },
   "plot": {
     "xlabel": "U / V vs. SHE",
-    "ylabel": "Free energy / eV"
+    "ylabel": "Electronic energy expression / eV"
   }
 }
