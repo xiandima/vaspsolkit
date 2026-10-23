@@ -1,8 +1,19 @@
-# SLURM 集群配置
+# 服务器适配
 
-本页描述实际实现，不把可存储的配置字段等同于已支持的提交能力。首次使用应提供本机
-已验证的 SLURM 脚本，并先核对队列政策、MPI/VASP 编译环境与许可证；公共仓库不保存
-机构专属模块路径、账户或计算数据。
+[手册首页](index.md) · [使用手册](USER_GUIDE.md)
+
+换服务器时不需要改 Python 源码。先准备该服务器上可用的提交脚本，再在 Case 中确认资源。
+SLURM 用户使用下面的标准流程；其他调度器需准备命令包装脚本，见[Custom 适配边界](#custom-适配边界)。
+
+## 首次接入一台服务器
+
+1. 向管理员或已有作业确认：分区名、节点核数、允许的 walltime，以及所需 account/QOS/内存。
+2. 将本机已验证的脚本放进 Case，建议命名为 `vasp.slurm`。确认其中的环境加载和 VASP 启动行。
+3. 在菜单提交界面选择本机资源，先阅读最终配置，再明确输入 `SUBMIT`。指定节点时先选分区。
+
+首次适配建议用小体系试算，检查作业真正启动、输出完整且电子/离子收敛，再扩大批量。
+输入准备和 dry-run 可离线测试，但不能证明真实队列、MPI 或 VASP 环境可用。
+公共仓库不提供机构专属模块路径、账户、VASP 可执行文件或赝势。
 
 ## 支持范围
 
@@ -20,6 +31,7 @@
 起始值 compute、1 节点、96 tasks、96 tasks/node、72:00:00 **未经修改就会用于提交**。
 它们不是跨集群推荐资源。tasks 指 MPI ranks，不等于 GPU 数或 OpenMP 线程数；请按本机
 节点容量及 VASP 并行约定设置。不要只把 launcher 字段换成 srun 后就认为已适配。
+未修改的默认启动命令等价于 `mpirun -np 96 vasp_std`，核数改变后应检查启动行与请求一致。
 
 ## 本机脚本
 
@@ -42,8 +54,15 @@ mpirun -np "${SLURM_NTASKS}" vasp_std > vasp.log 2>&1
 
 ## 选择资源
 
-菜单提交时可选自动或指定。指定策略先选分区，再查看分区内节点；资源预检会参考当前
+菜单提交时可选自动或指定，两者都可先选择当前服务器的分区。自动分配不绑定节点；当前
+配置的分区仍存在时可回车沿用，否则需明确输入有效分区。查询失败时不会猜测分区。
+单节点自动分配的 tasks-per-node 随总 tasks 更新，多节点仍保留配置中的节点数和每节点 tasks。
+指定策略先选分区，再查看分区内节点；资源预检会参考当前
 空闲核心，因此可能拒绝暂时没有足够空闲核心的选择。快照不是节点预留，也不保证立即运行。
+
+提交菜单里的 walltime 和脚本目前沿用 Case 配置，不在这一步询问修改。需要调整时，先取消
+提交，在 `vaspsolkit.json` 的 scheduler 中修改 `walltime` / `script`，再打开菜单核对；
+不要在其他操作正写入配置时编辑。指定节点用户也可用下面的 configure-scheduler 同时设置时限。
 
 ```bash
 vaspsolkit configure-scheduler --workdir /path/to/my-case
@@ -95,3 +114,25 @@ UNKNOWN、回执不确定、查询失败均不能作为重复提交的依据。�
 工作流可识别的单一状态（如 RUNNING、COMPLETED），不能直接返回任意队列表；空输出或
 失败按未知处理。inspect 只保存原始文本，不具备结构化分区/节点容量检查。
 需要测试提交回执、状态映射、取消和异常恢复后再使用；不能只改 kind 就宣称全流程适配。
+
+对于输入齐全的新 Case，可以用以下命令初始化。路径和包装程序替换成自己的值，SHE 数值
+与来源也需按方法确认；`--yes` 会写入配置，但本命令不提交任务：
+
+```bash
+vaspsolkit init --workdir "/path/to/my case" --yes \
+  --scheduler custom --script submit.sh \
+  --she-reference 4.70 --she-reference-source "替换为实际参考来源" \
+  --submit-command '"/path/to/site tools/site-submit" "{script}"' \
+  --status-command '"/path/to/site tools/site-status" "{job_id}"' \
+  --cancel-command '"/path/to/site tools/site-cancel" "{job_id}"' \
+  --inspect-command '"/path/to/site tools/site-queue"' \
+  --job-id-regex 'JobID=(?P<job_id>[0-9]+)'
+```
+
+这些命令按 Shell 风格引号拆分为参数，**不经过 Shell**。不会展开 `$HOME`、`~`、通配符、
+管道或重定向，只替换 `{script}` 和 `{job_id}`；需要这类逻辑时写进自己的包装脚本。
+custom 的提交命令必填，其他命令可选；不配置 status 会保留 UNKNOWN，不配置 cancel 无法取消。
+
+custom 用户使用[直接命令流程](USER_GUIDE.md#直接命令流程)，不使用 SLURM 专属资源菜单或
+`configure-scheduler`。不要为 custom 套用 `--resource-*` 参数；资源由自己的脚本或包装器管理。
+初始化不会验证包装程序真实可用，先用测试任务确认 Job ID 提取和状态查询正确，再运行生产计算。

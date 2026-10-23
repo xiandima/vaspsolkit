@@ -13,6 +13,7 @@ from typing import Optional, Tuple
 
 from .config import KitConfig, load_kit_config
 from .reference_settings import inspect_reference_freshness, unusual_she_reference
+from .sampling import kpoints_required
 from .state import WorkflowState
 
 
@@ -120,9 +121,19 @@ def inspect_case(workdir: Path, config_path: Optional[Path] = None) -> CaseSnaps
         )
         return CaseSnapshot(root, selected_config, diagnostics=tuple(diagnostics))
 
+    required_inputs = BASE_INPUTS
+    try:
+        if not kpoints_required(root):
+            required_inputs = tuple(name for name in BASE_INPUTS if name != "KPOINTS")
+    except (OSError, ValueError) as exc:
+        diagnostics.append(Diagnostic(
+            "invalid-sampling", "error", "K-point sampling is invalid",
+            str(exc), "Correct KSPACING/KGAMMA in INCAR before preparing or submitting.",
+        ))
+
     if not selected_config.is_file():
         missing = (selected_config.name,) + tuple(
-            name for name in BASE_INPUTS if not (root / name).is_file()
+            name for name in required_inputs if not (root / name).is_file()
         )
         diagnostics.append(
             Diagnostic(
@@ -154,7 +165,7 @@ def inspect_case(workdir: Path, config_path: Optional[Path] = None) -> CaseSnaps
         )
         return CaseSnapshot(root, selected_config, diagnostics=tuple(diagnostics))
 
-    required = BASE_INPUTS + (config.scheduler.script,)
+    required = required_inputs + (config.scheduler.script,)
     missing = tuple(name for name in required if not (root / name).is_file())
     state_path = root / "vaspsolkit.state.json"
     state = None

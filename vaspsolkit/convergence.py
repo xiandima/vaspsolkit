@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Sequence
 
-from .incar import replace_or_append
+from .incar import parse_incar, replace_or_append
 from .parsers import outcar_converged_from_text
 
 
@@ -168,7 +168,11 @@ def _error_diagnostics(text: str) -> List[str]:
 def _nelect_diagnostics(incar_path: Path, outcar_text: str) -> List[str]:
     if not incar_path.exists():
         return []
-    incar_nelect = _last_float(incar_path.read_text(encoding="utf-8", errors="ignore"), r"\bNELECT\s*=\s*([-+0-9.Ee]+)")
+    value = parse_incar(incar_path.read_text(encoding="utf-8", errors="ignore")).get("NELECT", "")
+    try:
+        incar_nelect = float(value.upper().replace("D", "E"))
+    except ValueError:
+        return []
     outcar_nelect = _last_float(outcar_text, r"NELECT\s*=\s*([-+0-9.Ee]+)")
     if incar_nelect is None or outcar_nelect is None:
         return []

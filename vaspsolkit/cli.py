@@ -4,9 +4,14 @@ import argparse
 import copy
 import difflib
 import json
+import os
+import shlex
+import stat
 import subprocess
 import sys
+import tempfile
 import time
+from dataclasses import asdict
 from pathlib import Path
 from typing import Callable, List, Optional, Sequence
 
@@ -20,6 +25,7 @@ from .config import (
     load_kit_config,
     migrate_config_data,
     serialize_kit_config,
+    write_config_bytes,
     write_kit_config,
 )
 from .convergence import DiagnosticResult, apply_repair, propose_repair
@@ -32,21 +38,24 @@ from .inputs import (
     validate_potcar_order,
     vaspkit_executable,
 )
-from .incar import replace_or_append
+from .incar import parse_incar, replace_or_append
+from .input_completion import add_input_options, complete_inputs
 from .orchestrator import (
     STATE_FILENAME,
     check_neutral_job,
     check_prepared_jobs,
+    collection_source_fingerprint,
     load_state,
     prepare_charge_jobs,
     prepare_neutral_job,
     prepare_kit_jobs,
     refresh_neutral_scheduler_state,
     refresh_state,
+    record_collection,
     reset_queued_jobs,
     submission_preview,
+    submission_batch,
     submit_neutral_job,
-    submit_ready_jobs,
     submit_selected_jobs,
 )
 from .postprocess import postprocess_summary
@@ -54,7 +63,7 @@ from .operations.actions import ResourceRequest
 from .reaction import run_reaction_spec
 from .reference_settings import inspect_reference_freshness, prompt_reference_settings
 from .scheduler import QueueEntry, SlurmScheduler, scheduler_from_config
-from .state import JobRecord, WorkflowState
+from .state import JobRecord, WorkflowState, workflow_state_lock
 from .submission_resources import resources_from_config
 from .workflow import (
     audit_results,
@@ -67,6 +76,27 @@ from .workflow import (
 
 InputFn = Callable[[str], str]
 OutputFn = Callable[[str], object]
+
+
+def entrypoint(argv: Optional[List[str]] = None) -> int:
+    """Present expected user/environment failures without a Python traceback."""
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    try:
+        return main(arguments)
+    except (EOFError, KeyboardInterrupt) as exc:
+        print(
+            "\n操作已中断或输入已结束。若正在提交任务，请先检查状态和 submission receipt；不要直接重提。",
+            file=sys.stderr,
+        )
+        return 130 if isinstance(exc, KeyboardInterrupt) else 1
+    except (OSError, ValueError, RuntimeError, KeyError) as exc:
+        if "--debug" in arguments:
+            raise
+        print(f"错误：{exc}", file=sys.stderr)
+        if isinstance(exc, FileNotFoundError) and "vaspsolkit.json" in str(exc):
+            print("请先在 Case 目录执行 vaspsolkit init，或用 --workdir/--config 指向已有 Case。", file=sys.stderr)
+        print("完整诊断：vaspsolkit --debug <原来的子命令及参数>", file=sys.stderr)
+        return 2
 
 
 def main(
@@ -89,6 +119,10 @@ def main(
         return _open_menu(Path("."), input_fn=input_fn, output=output)
     if args.command == "init":
         return _cmd_init(args, input_fn, output)
+    if args.command == "inputs":
+        return complete_inputs(args, input_fn=input_fn, output=output)
+    if args.command == "next":
+        return _cmd_next(args, input_fn, output)
     if args.command == "configure-reference":
         return _cmd_configure_reference(args, input_fn, output)
     if args.command == "migrate":
@@ -210,18 +244,15 @@ def main(
         if not confirmed and not args.dry_run:
             output("submission cancelled")
             return 1
-        submitted = submit_ready_jobs(
-            workdir,
-            config,
-            state,
-            scheduler=scheduler,
-            confirmed=confirmed,
-            dry_run=args.dry_run,
-            require_prepared_check=True,
+        batch = preview["batches"][0] if preview["batches"] else []
+        if not batch:
+            output("no prepared jobs fit the current max_inflight capacity")
+            return 0
+        return _submit_selected_once(
+            workdir, config, config_path, batch,
+            resources=resources_from_config(config),
+            confirmed=confirmed, dry_run=args.dry_run, output=output,
         )
-        for name, job_id in submitted.items():
-            output(f"{name}: {job_id}")
-        return 0
     if args.command == "submit-selected":
         resources = _submission_resources(config, args)
         confirmed = args.yes or (not args.dry_run and _confirm("Submit selected charge jobs?", input_fn))
@@ -256,7 +287,7 @@ def main(
     if args.command == "repair":
         return _cmd_repair(args, workdir, config, input_fn, output)
     if args.command == "collect":
-        rows = collect_results(workdir, config.workflow)
+        rows = _collect_current_results(workdir, config)
         output(f"wrote {result_file_path(workdir, config.workflow, config.workflow.summary_file)} ({len(rows)} rows)")
         return 0
     if args.command == "audit":
@@ -264,7 +295,7 @@ def main(
         freshness = inspect_reference_freshness(summary_path, config.workflow)
         if freshness.status != "current":
             raise RuntimeError("summary.csv 的 SHE reference 已过期或无法确认；请先执行 collect")
-        rows = collect_results(workdir, config.workflow)
+        rows = _collect_current_results(workdir, config)
         report = audit_results(workdir, config.workflow, rows)
         quality = Path(args.output) if args.output else result_file_path(workdir, config.workflow, "quality_report.csv")
         rerun = Path(args.rerun_output) if args.rerun_output else result_file_path(workdir, config.workflow, "points_to_rerun.csv")
@@ -281,6 +312,7 @@ def main(
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="vaspsolkit", description="Interactive VASP/VASPsol workflow")
+    parser.add_argument("--debug", action="store_true", help="show tracebacks for input and environment errors")
     sub = parser.add_subparsers(dest="command")
 
     init = sub.add_parser("init", help="initialize inputs and vaspsolkit configuration")
@@ -289,10 +321,27 @@ def _build_parser() -> argparse.ArgumentParser:
     init.add_argument("--profile", choices=sorted(PROFILE_TAGS), default=None)
     init.add_argument("--scheduler", choices=["slurm", "custom"], default=None)
     init.add_argument("--script", default=None)
+    for name in ("submit", "status", "cancel", "inspect"):
+        init.add_argument(
+            f"--{name}-command", default=None,
+            help=f"custom scheduler {name} command, shell-quoted argv with {{script}}/{{job_id}} placeholders",
+        )
+    init.add_argument("--job-id-regex", default=None, help="custom scheduler job ID regex, preferably with (?P<job_id>...)")
     init.add_argument("--set", action="append", default=[], metavar="TAG=VALUE")
     init.add_argument("--she-reference", type=float, default=None)
     init.add_argument("--she-reference-source", default=None)
     init.add_argument("--yes", action="store_true")
+    add_input_options(init)
+
+    inputs = sub.add_parser("inputs", help="check and complete missing inputs with a confirmed library/mesh")
+    _add_common_args(inputs)
+    inputs.add_argument("--yes", action="store_true")
+    inputs.add_argument("--dry-run", action="store_true")
+    add_input_options(inputs)
+
+    next_step = sub.add_parser("next", help="perform menu 02 once; dry-run prints the recommendation only")
+    _add_common_args(next_step)
+    next_step.add_argument("--dry-run", action="store_true")
 
     reference = sub.add_parser("configure-reference", help="configure the Case SHE reference")
     reference.add_argument("--workdir", default=".")
@@ -396,11 +445,38 @@ def _has_interactive_tty() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
+def _require_uninitialized(config_path: Path, state_path: Path) -> None:
+    for target in (config_path, state_path):
+        if target.exists() or target.is_symlink():
+            raise FileExistsError(
+                f"Case already has an existing configuration/state file: {target}; "
+                "use menu, configure-reference or configure-scheduler to continue; init will not reset Job IDs."
+            )
+
+
 def _cmd_init(args, input_fn: InputFn, output: OutputFn) -> int:
     workdir = Path(args.workdir).resolve()
-    workdir.mkdir(parents=True, exist_ok=True)
     incar_path = workdir / "INCAR"
-    preserve_user_incar = incar_path.is_file() and args.profile is None
+    config_path = Path(args.config) if args.config else workdir / "vaspsolkit.json"
+    state_path = workdir / STATE_FILENAME
+    _require_uninitialized(config_path, state_path)
+    if args.yes or (input_fn is input and not sys.stdin.isatty()):
+        missing = []
+        for option, value in (
+            ("--she-reference", args.she_reference),
+            ("--scheduler", args.scheduler),
+            ("--script", args.script),
+        ):
+            if value is None or (isinstance(value, str) and not value.strip()):
+                missing.append(option)
+        if not incar_path.is_file() and args.profile is None and not args.incar_template:
+            missing.append("--profile (or an existing INCAR)")
+        if missing:
+            raise ValueError(
+                "non-interactive init requires explicit " + ", ".join(missing)
+                + "; supply these options with --yes for batch execution, or run init in an interactive terminal"
+            )
+    preserve_user_incar = (incar_path.is_file() or bool(args.incar_template)) and args.profile is None
     if preserve_user_incar:
         profile = "vaspsol-neutral-relax"
         output("Detected existing INCAR; preserving user settings and checking required VASPsol tags.")
@@ -424,10 +500,13 @@ def _cmd_init(args, input_fn: InputFn, output: OutputFn) -> int:
     scheduler_kind = args.scheduler or _choose("Scheduler", ["slurm", "custom"], input_fn, output)
     default_script = {"slurm": "vasp.slurm", "custom": "submit.sh"}[scheduler_kind]
     script = args.script or input_fn(f"Submission script [{default_script}]: ").strip() or default_script
-    _ensure_standard_inputs(workdir, args.yes, input_fn, output)
+    scheduler = _initial_scheduler(args, scheduler_kind, script, input_fn, output)
+    workdir.mkdir(parents=True, exist_ok=True)
     script_path = workdir / script
     if not script_path.exists():
         raise FileNotFoundError(f"submission script is missing: {script_path}")
+    if complete_inputs(args, input_fn=input_fn, output=output, require_incar=preserve_user_incar, incar_overrides=_parse_overrides(args.set)) != 0:
+        return 1
     use_case_setup = (
         preserve_user_incar
         and args.yes
@@ -436,21 +515,23 @@ def _cmd_init(args, input_fn: InputFn, output: OutputFn) -> int:
         and scheduler_kind != "custom"
     )
     if use_case_setup:
-        scheduler = SchedulerConfig(kind=scheduler_kind, script=script)
-        plan = plan_case_initialization(workdir, scheduler, workflow)
-        elements = validate_potcar_order(workdir / "POSCAR", workdir / "POTCAR")
-        encut = suggest_encut(workdir / "POTCAR")
-        output("User INCAR values will be preserved.")
-        output(f"POSCAR/POTCAR order: {' '.join(elements)}")
-        output(f"Suggested ENCUT from 1.3 x max(ENMAX): {encut} eV")
-        _print_critical_incar(plan.incar_after, output)
-        written = apply_case_initialization(plan, confirmed=True)
+        with workflow_state_lock(state_path):
+            _require_uninitialized(config_path, state_path)
+            plan = plan_case_initialization(workdir, scheduler, workflow)
+            elements = validate_potcar_order(workdir / "POSCAR", workdir / "POTCAR")
+            encut = suggest_encut(workdir / "POTCAR")
+            output("User INCAR values will be preserved.")
+            output(f"POSCAR/POTCAR order: {' '.join(elements)}")
+            output(f"Suggested ENCUT from 1.3 x max(ENMAX): {encut} eV")
+            _print_critical_incar(plan.incar_after, output)
+            written = apply_case_initialization(plan, confirmed=True)
         for path in written:
             output(f"wrote {path}")
         return 0
     elements = validate_potcar_order(workdir / "POSCAR", workdir / "POTCAR")
     encut = suggest_encut(workdir / "POTCAR")
-    existing = incar_path.read_text(encoding="utf-8", errors="ignore") if incar_path.exists() else ""
+    incar_before = incar_path.read_bytes() if incar_path.exists() else None
+    existing = incar_before.decode("utf-8", errors="ignore") if incar_before is not None else ""
     overrides = _parse_overrides(args.set)
     if preserve_user_incar:
         update = plan_neutral_vaspsol_update(existing)
@@ -478,22 +559,95 @@ def _cmd_init(args, input_fn: InputFn, output: OutputFn) -> int:
         if not _confirm("Write INCAR, vaspsolkit.json, and state file?", input_fn):
             output("initialization cancelled")
             return 1
-    scheduler = SchedulerConfig(kind=scheduler_kind, script=script)
-    if scheduler_kind == "custom":
-        submit = input_fn("Custom submit command tokens (use {script}): ").strip() if not args.yes else ""
-        if not submit:
-            raise ValueError("custom scheduler requires an interactive submit command")
-        scheduler.submit_command = submit.split()
+    from .sampling import kpoints_required
+    if kpoints_required(workdir, incar_text=candidate) and not (workdir / "KPOINTS").is_file():
+        raise ValueError("final INCAR requires KPOINTS or a valid explicit KSPACING")
     config = KitConfig(profile=profile, workflow=workflow, scheduler=scheduler)
-    config_path = Path(args.config) if args.config else workdir / "vaspsolkit.json"
-    config_before = config_path.read_bytes() if config_path.exists() else EXPECT_ABSENT
-    incar_path.write_text(candidate, encoding="utf-8")
-    write_kit_config(config_path, config, expected_current=config_before)
-    WorkflowState(stage="setup").save(workdir / STATE_FILENAME)
+    # Do not hold the state lock across prompts; revalidate the preview at commit.
+    with workflow_state_lock(state_path):
+        _require_uninitialized(config_path, state_path)
+        current_incar = incar_path.read_bytes() if incar_path.exists() else None
+        if current_incar != incar_before:
+            raise RuntimeError("stale initialization preview: INCAR changed; review the new template before retrying")
+        if incar_path.is_symlink():
+            raise ValueError("copy the INCAR template into the Case before initialization; a symlink will not be replaced")
+        mode = stat.S_IMODE(incar_path.stat().st_mode) if incar_before is not None else None
+        initial_state = WorkflowState(stage="setup")
+        attempted = []
+        try:
+            attempted.append((config_path, None, serialize_kit_config(config), None))
+            write_kit_config(config_path, config, expected_current=EXPECT_ABSENT)
+            attempted.append((incar_path, incar_before, candidate.encode("utf-8"), mode))
+            write_config_bytes(
+                incar_path, candidate.encode("utf-8"),
+                expected_current=incar_before if incar_before is not None else EXPECT_ABSENT,
+            )
+            if mode is not None:
+                incar_path.chmod(mode)
+            attempted.append((state_path, None, json.dumps(asdict(initial_state), indent=2, sort_keys=True).encode("utf-8"), None))
+            initial_state.save(state_path)
+        except BaseException as exc:
+            problems = _rollback_initialization(attempted)
+            if problems:
+                raise RuntimeError("initialization failed; rollback needs manual review: " + "; ".join(problems)) from exc
+            raise
     output(f"wrote {incar_path}")
     output(f"wrote {config_path}")
     output(f"wrote {workdir / STATE_FILENAME}")
     return 0
+
+
+def _rollback_initialization(attempted):
+    problems = []
+    for path, before, after, mode in reversed(attempted):
+        try:
+            if path.is_symlink():
+                raise RuntimeError("target changed to a symlink")
+            current = path.read_bytes() if path.exists() else None
+            if current == before:
+                continue
+            if current != after:
+                raise RuntimeError("target changed since initialization")
+            if before is None:
+                path.unlink()
+            else:
+                write_config_bytes(path, before, expected_current=after)
+                path.chmod(mode)
+        except (OSError, RuntimeError) as exc:
+            problems.append(f"{path}: {exc}")
+    return problems
+
+
+def _initial_scheduler(args, kind: str, script: str, input_fn: InputFn, output: OutputFn) -> SchedulerConfig:
+    scheduler = SchedulerConfig(kind=kind, script=script)
+    names = ("submit", "status", "cancel", "inspect")
+    if kind != "custom":
+        if any(getattr(args, f"{name}_command") is not None for name in names) or args.job_id_regex is not None:
+            raise ValueError("custom command options require --scheduler custom")
+        return scheduler
+    for name in names:
+        value = getattr(args, f"{name}_command")
+        if value is None and not args.yes:
+            placeholder = "{script}" if name == "submit" else "{job_id}"
+            value = input_fn(f"Custom {name} command (use {placeholder}, blank to skip): ").strip()
+        command = shlex.split(value or "")
+        if name == "submit" and not command:
+            raise ValueError("custom scheduler requires --submit-command (or an interactive command)")
+        setattr(scheduler, f"{name}_command", command)
+    if args.job_id_regex is not None:
+        scheduler.job_id_pattern = args.job_id_regex
+    elif not args.yes:
+        scheduler.job_id_pattern = input_fn(
+            f"Job ID regex [{scheduler.job_id_pattern}]: "
+        ).strip() or scheduler.job_id_pattern
+    scheduler_from_config(scheduler)
+    if not scheduler.status_command:
+        output("Warning: no custom status command; submitted jobs will remain UNKNOWN until checked manually.")
+    for name in names:
+        command = getattr(scheduler, f"{name}_command")
+        output(f"custom {name}: {shlex.join(command) if command else '(not configured)'}")
+    output(f"custom job ID regex: {scheduler.job_id_pattern}")
+    return scheduler
 
 
 def _cmd_configure_reference(args, input_fn: InputFn, output: OutputFn) -> int:
@@ -501,8 +655,11 @@ def _cmd_configure_reference(args, input_fn: InputFn, output: OutputFn) -> int:
     config_path = Path(args.config) if args.config else workdir / "vaspsolkit.json"
     before = config_path.read_bytes()
     config = load_kit_config(config_path)
-    if args.yes and args.she_reference is None:
-        raise ValueError("--yes requires --she-reference")
+    if args.she_reference is None and (args.yes or (input_fn is input and not sys.stdin.isatty())):
+        raise ValueError(
+            "non-interactive configure-reference requires --she-reference; "
+            "supply it with --yes for batch execution, or use an interactive terminal"
+        )
     settings = prompt_reference_settings(
         default_value=config.workflow.she_reference,
         default_source=config.workflow.she_reference_source,
@@ -604,6 +761,8 @@ def _cmd_status(args, workdir: Path, config: KitConfig, output: OutputFn) -> int
 
 
 def _cmd_repair(args, workdir: Path, config: KitConfig, input_fn: InputFn, output: OutputFn) -> int:
+    if args.yes and not args.job:
+        raise ValueError("repair --yes requires --job; omit --yes to select a job interactively")
     state = load_state(workdir)
     name = args.job or input_fn("Job folder key to repair: ").strip()
     if name not in state.jobs:
@@ -628,10 +787,23 @@ def _cmd_repair(args, workdir: Path, config: KitConfig, input_fn: InputFn, outpu
     state.save(workdir / STATE_FILENAME)
     output(f"archived previous outputs to {archive}")
     if not args.no_submit:
-        submitted = submit_ready_jobs(workdir, config, state, confirmed=True)
-        for key, job_id in submitted.items():
-            output(f"{key}: {job_id}")
+        batch = submission_batch(config, state, [key for key, job in state.jobs.items() if job.status == "PREPARED"])
+        if batch:
+            config_path = Path(args.config) if args.config else workdir / "vaspsolkit.json"
+            return _submit_selected_once(
+                workdir, config, config_path, batch,
+                resources=resources_from_config(config),
+                confirmed=True, dry_run=False, output=output,
+            )
     return 0
+
+
+def _collect_current_results(workdir: Path, config: KitConfig):
+    with workflow_state_lock(workdir / STATE_FILENAME):
+        source = collection_source_fingerprint(workdir, config)
+        rows = collect_results(workdir, config.workflow)
+        record_collection(workdir, config, source)
+        return rows
 
 
 def _cmd_run(
@@ -710,6 +882,9 @@ def _submit_neutral_once(
     output: OutputFn,
 ) -> int:
     """Submit through the durable receipt barrier, or perform a receipt-free dry run."""
+    if not confirmed and not dry_run:
+        output("submission cancelled; no job was submitted")
+        return 1
     if dry_run:
         effective = _config_with_submission_resources(config, resources)
         submit_neutral_job(
@@ -826,24 +1001,132 @@ def _open_menu(
     )
 
 
+def _cmd_next(args, input_fn: InputFn, output: OutputFn) -> int:
+    from .guide_model import build_snapshot, recommend_action
+    from .interactive_menu import run_menu_action, synchronize_case
+
+    workdir = Path(args.workdir).expanduser().resolve()
+    config_path = Path(args.config).expanduser().resolve() if args.config else None
+    if not args.dry_run:
+        if input_fn is input and not sys.stdin.isatty():
+            raise ValueError("next needs an interactive terminal; use next --dry-run and the displayed explicit command for batch execution")
+        sync = synchronize_case(workdir, config_path=config_path)
+        if not sync.ok:
+            output(f"队列查询失败：{sync.warning}；未执行后续操作。")
+            return 1
+    snapshot = build_snapshot(workdir, config_path=config_path)
+    action = recommend_action(snapshot)
+    output(f"推荐下一步：{action.title_zh}")
+    output(action.reason_zh)
+    if action.cli_command:
+        if action.cli_command == "postprocess":
+            results = workdir / snapshot.case.config.workflow.results_root
+            command = ["vaspsolkit", "postprocess", "--summary", str(results / snapshot.case.config.workflow.summary_file), "--output", str(results / "eu")]
+        else:
+            command = ["vaspsolkit", action.cli_command, "--workdir", str(workdir)]
+            if config_path is not None:
+                command.extend(["--config", str(config_path)])
+            if action.cli_command == "submit-selected":
+                command.extend(action.selectable_jobs)
+        output("命令入口：" + shlex.join(command))
+    if args.dry_run:
+        output("仅查看本地推荐；未查询队列、写文件或提交任务。")
+        return 0
+    return run_menu_action("02", snapshot, input_fn=input_fn, output=output)
+
+
 def _ensure_standard_inputs(workdir: Path, noninteractive: bool, input_fn: InputFn, output: OutputFn) -> None:
-    if not (workdir / "POSCAR").exists():
+    from .sampling import describe_sampling, kpoints_required
+    if not (workdir / "POSCAR").is_file():
         raise FileNotFoundError(f"POSCAR is missing: {workdir / 'POSCAR'}")
-    missing = [name for name in ("POTCAR", "KPOINTS") if not (workdir / name).exists()]
+    before = {}
+    for name in ("POSCAR", "INCAR", "POTCAR", "KPOINTS"):
+        path = workdir / name
+        if path.exists() or path.is_symlink():
+            if not path.is_file() or not path.stat().st_size:
+                raise ValueError(f"{name} must be a non-empty file: {path}")
+            before[name] = path.read_bytes()
+        else:
+            before[name] = None
+    needs_kpoints = kpoints_required(workdir)
+    missing = [name for name in ("POTCAR", "KPOINTS") if before[name] is None and (name != "KPOINTS" or needs_kpoints)]
     if not missing:
+        output(describe_sampling(workdir))
         return
     if noninteractive:
         raise FileNotFoundError(f"missing standard VASP inputs: {', '.join(missing)}")
     executable = vaspkit_executable()
     if executable is None:
         raise FileNotFoundError(f"missing {', '.join(missing)} and vaspkit is unavailable")
-    output(f"Missing {', '.join(missing)}; launching VASPKIT in {workdir}")
+    output(f"Missing {', '.join(missing)}; VASPKIT will run in a temporary directory. Only these missing inputs will be imported.")
     if not _confirm("Open interactive VASPKIT now?", input_fn):
         raise FileNotFoundError(f"missing standard VASP inputs: {', '.join(missing)}")
-    subprocess.run([executable], cwd=workdir, check=False)
-    remaining = [name for name in missing if not (workdir / name).exists()]
-    if remaining:
-        raise FileNotFoundError(f"VASPKIT did not create: {', '.join(remaining)}")
+    from .operations.snapshot import _validate_kpoints
+
+    with tempfile.TemporaryDirectory(prefix="vaspsolkit-inputs-") as temporary:
+        stage = Path(temporary)
+        for name, data in before.items():
+            if data is not None:
+                (stage / name).write_bytes(data)
+        result = subprocess.run([executable], cwd=stage, check=False)
+        if result.returncode != 0:
+            raise RuntimeError(f"VASPKIT exited with code {result.returncode}; no generated inputs imported")
+        generated = {}
+        for name in missing:
+            path = stage / name
+            if path.is_symlink() or not path.is_file() or not path.stat().st_size:
+                raise ValueError(f"VASPKIT did not create a non-empty regular {name}; no generated inputs imported")
+            generated[name] = path.read_bytes()
+        if "POTCAR" in generated:
+            validate_potcar_order(workdir / "POSCAR", stage / "POTCAR")
+            suggest_encut(stage / "POTCAR")
+        if "KPOINTS" in generated:
+            _validate_kpoints(generated["KPOINTS"].decode("utf-8"))
+        with workflow_state_lock(workdir / STATE_FILENAME):
+            for name, data in before.items():
+                path = workdir / name
+                current = path.read_bytes() if path.is_file() else None
+                if current != data or (data is None and (path.exists() or path.is_symlink())):
+                    raise RuntimeError(f"{name} changed during VASPKIT interaction; no generated inputs imported")
+            _publish_missing_inputs(workdir, generated)
+            for name in generated:
+                output(f"imported {workdir / name}")
+
+
+def _publish_missing_inputs(workdir: Path, generated) -> None:
+    # Stage complete files on the target filesystem before publishing any name.
+    with tempfile.TemporaryDirectory(prefix=".vaspsolkit-import-", dir=workdir) as temporary:
+        stage = Path(temporary)
+        for name, data in generated.items():
+            with (stage / name).open("xb") as handle:
+                os.fchmod(handle.fileno(), 0o600)
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+        published = []
+        try:
+            for name in generated:
+                source, target = stage / name, workdir / name
+                published.append((source, target))
+                os.link(source, target)
+        except BaseException as exc:
+            problems = []
+            for source, target in reversed(published):
+                try:
+                    if not target.exists() and not target.is_symlink():
+                        continue
+                    if (
+                        target.is_symlink()
+                        or not os.path.samestat(source.stat(), target.stat())
+                        or target.read_bytes() != generated[target.name]
+                    ):
+                        raise RuntimeError("target changed during input publication")
+                    target.unlink()
+                except (OSError, RuntimeError) as rollback_error:
+                    problems.append(f"{target}: {rollback_error}")
+            if problems:
+                raise RuntimeError("input publication failed; rollback needs manual review: " + "; ".join(problems)) from exc
+            raise
 
 
 def _print_plan(config: KitConfig, preview, output: OutputFn) -> None:
@@ -896,12 +1179,7 @@ def _state_for_plan(workdir: Path, config: KitConfig) -> WorkflowState:
 
 
 def _print_critical_incar(text: str, output: OutputFn) -> None:
-    values = {}
-    for line in text.splitlines():
-        clean = line.split("!", 1)[0].split("#", 1)[0]
-        if "=" in clean:
-            key, value = clean.split("=", 1)
-            values[key.strip().upper()] = value.strip()
+    values = parse_incar(text)
     output("Critical INCAR parameters:")
     for key in CRITICAL_INCAR_TAGS:
         output(f"  {key} = {values.get(key, '<unset>')}")
@@ -923,8 +1201,11 @@ def _choose(label: str, choices: List[str], input_fn: InputFn, output: OutputFn)
         output(f"  {index}. {choice}")
     value = input_fn("Select: ").strip()
     try:
-        return choices[int(value) - 1]
-    except (ValueError, IndexError) as exc:
+        index = int(value)
+        if not 1 <= index <= len(choices):
+            raise ValueError("out of range")
+        return choices[index - 1]
+    except ValueError as exc:
         raise ValueError(f"invalid {label} selection: {value}") from exc
 
 

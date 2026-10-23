@@ -14,10 +14,12 @@ from typing import Dict, List, Optional
 
 from .config import KitConfig
 from .convergence import check_job
+from .incar import parse_incar
 from .parsers import parse_outcar
+from .sampling import kpoints_required
 from .scheduler import SlurmScheduler, plan_submission_batches, scheduler_from_config
 from .state import JobRecord, WorkflowState, workflow_state_lock
-from .workflow import _write_charge_incar, atomic_copy, job_folder_path
+from .workflow import _write_charge_incar, atomic_copy, job_folder_path, result_file_path
 
 
 STATE_FILENAME = "vaspsolkit.state.json"
@@ -153,6 +155,8 @@ def _require_nonempty(path: Path) -> None:
 
 def _validate_neutral_inputs(base: Path, script: str) -> None:
     for filename in ("INCAR", "POSCAR", "POTCAR", "KPOINTS", script):
+        if filename == "KPOINTS" and not kpoints_required(base):
+            continue
         _require_nonempty(base / filename)
 
 
@@ -575,7 +579,10 @@ def prepare_charge_jobs(
         raise RuntimeError("neutral relaxation provenance is missing; re-run prepare-neutral")
     if _state_has_active_jobs(state):
         raise RuntimeError("active jobs are recorded; check them before preparing charge jobs")
+    require_kpoints = kpoints_required(base)
     for filename in ("INCAR", "POTCAR", "KPOINTS", config.scheduler.script, *NEUTRAL_REQUIRED_OUTPUTS):
+        if filename == "KPOINTS" and not require_kpoints:
+            continue
         _require_nonempty(base / filename)
     if strict:
         _archive_charge_sweep(base, state_file)
@@ -599,8 +606,12 @@ def prepare_charge_jobs(
         if not workflow.charge_points_include_neutral and abs(offset) <= 1.0e-12:
             continue
         target = job_folder_path(base, workflow, folder_name)
+        if not require_kpoints and ((target / "KPOINTS").exists() or (target / "KPOINTS").is_symlink()):
+            raise ValueError(f"existing {target / 'KPOINTS'} would override native KSPACING; archive or resolve it before preparing")
         target.mkdir(parents=True, exist_ok=True)
         for filename in ("POTCAR", "KPOINTS", config.scheduler.script):
+            if filename == "KPOINTS" and not require_kpoints:
+                continue
             shutil.copy2(base / filename, target / filename)
         for filename in workflow.copy_files:
             if filename in {"POTCAR", "KPOINTS", config.scheduler.script, "CHGCAR", "INCAR"}:
@@ -709,7 +720,7 @@ def submission_preview(config: KitConfig, state: WorkflowState, scheduler=None) 
             else None
         )
     else:
-        active = global_active
+        active = max(global_active, _workflow_active_count(state))
         capacity = None
     return {
         "queue": queue,
@@ -726,6 +737,14 @@ def submission_preview(config: KitConfig, state: WorkflowState, scheduler=None) 
     }
 
 
+def submission_batch(config: KitConfig, state: WorkflowState, names) -> List[str]:
+    batches = plan_submission_batches(
+        list(dict.fromkeys(names)), config.scheduler.max_inflight,
+        active=_workflow_active_count(state),
+    )
+    return batches[0] if batches else []
+
+
 def submit_ready_jobs(
     base: Path,
     config: KitConfig,
@@ -736,6 +755,7 @@ def submit_ready_jobs(
     state_path: Optional[Path] = None,
     require_prepared_check: bool = False,
 ) -> Dict[str, str]:
+    """Checkpoint returned IDs; use WorkbenchController for durable submit receipts."""
     if not confirmed and not dry_run:
         raise PermissionError("submission requires explicit confirmation or --yes")
     base = Path(base)
@@ -767,9 +787,8 @@ def submit_ready_jobs(
         if not dry_run:
             record.job_id = job_id
             record.status = "SUBMITTED"
-    if not dry_run:
-        state.stage = "submitted" if submitted else state.stage
-        state.save(Path(state_path) if state_path else base / STATE_FILENAME)
+            state.stage = "submitted"
+            state.save(Path(state_path) if state_path else base / STATE_FILENAME)
     return submitted
 
 
@@ -784,12 +803,13 @@ def submit_selected_jobs(
     state_path: Optional[Path] = None,
     require_prepared_check: bool = False,
 ) -> Dict[str, str]:
+    """Checkpoint returned IDs; caller owns serialization and ambiguous-call recovery."""
     if not confirmed and not dry_run:
         raise PermissionError("submission requires explicit confirmation or --yes")
     if require_prepared_check and not state.prepared_checked:
         raise RuntimeError("run check-prepared before submitting charge jobs")
     base = Path(base)
-    names = [str(name) for name in selected]
+    names = list(dict.fromkeys(str(name) for name in selected))
     if not names:
         raise ValueError("at least one charge job must be selected")
     unknown = [name for name in names if name not in state.jobs]
@@ -799,6 +819,7 @@ def submit_selected_jobs(
     if not_ready:
         raise RuntimeError(f"selected charge job(s) are not PREPARED: {', '.join(not_ready)}")
 
+    names = submission_batch(config, state, names)
     scheduler = scheduler or scheduler_from_config(config.scheduler)
     submitted: Dict[str, str] = {}
     for name in names:
@@ -823,9 +844,8 @@ def submit_selected_jobs(
         if not dry_run:
             record.job_id = job_id
             record.status = "SUBMITTED"
-    if not dry_run:
-        state.stage = "submitted" if submitted else state.stage
-        state.save(Path(state_path) if state_path else base / STATE_FILENAME)
+            state.stage = "submitted"
+            state.save(Path(state_path) if state_path else base / STATE_FILENAME)
     return submitted
 
 
@@ -979,22 +999,75 @@ def load_state(base: Path, state_path: Optional[Path] = None) -> WorkflowState:
     return WorkflowState.load(Path(state_path) if state_path else Path(base) / STATE_FILENAME)
 
 
+def collection_source_fingerprint(base: Path, config: KitConfig, state=None) -> str:
+    """Track run identity and source stat signatures without rereading large LOCPOTs."""
+    base = Path(base)
+    state = state if state is not None else _load_or_create_state(base)
+    records = {"neutral": state.neutral, **{f"charge:{key}": value for key, value in state.jobs.items()}}
+    runs = {
+        name: (record.folder, record.job_id, record.restart_count, record.status)
+        for name, record in records.items() if record is not None
+    }
+    folders = [base] + [job_folder_path(base, config.workflow, name) for name in config.workflow.folders]
+    sources = {}
+    for folder in folders:
+        for name in ("INCAR", "POSCAR", "POTCAR", "KPOINTS", "OUTCAR", "LOCPOT", "CONTCAR", "OSZICAR"):
+            path = folder / name
+            try:
+                info = path.stat()
+            except FileNotFoundError:
+                signature = None
+            else:
+                if not stat.S_ISREG(info.st_mode):
+                    raise ValueError(f"collection source must be a regular file: {path}")
+                signature = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+            sources[str(path.relative_to(base))] = signature
+    payload = {"version": 1, "profile": config.profile, "workflow": asdict(config.workflow), "runs": runs, "sources": sources}
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def record_collection(base: Path, config: KitConfig, expected_source: str) -> None:
+    state_path = _state_path(base)
+    with workflow_state_lock(state_path):
+        state = _load_or_create_state(base)
+        if collection_source_fingerprint(base, config, state) != expected_source:
+            raise RuntimeError("collection sources changed; collect again before using these results")
+        if not state.jobs:
+            return
+        summary_hash = _sha256(result_file_path(base, config.workflow, config.workflow.summary_file))
+        for record in state.jobs.values():
+            record.metadata["collection_source_fingerprint"] = expected_source
+            record.metadata["collection_summary_sha256"] = summary_hash
+        state.save(state_path)
+
+
+def collection_is_current(base: Path, config: KitConfig) -> bool:
+    try:
+        state = _load_or_create_state(base)
+        if not state.jobs:
+            return False
+        source = collection_source_fingerprint(base, config, state)
+        summary_hash = _sha256(result_file_path(base, config.workflow, config.workflow.summary_file))
+        return all(
+            record.metadata.get("collection_source_fingerprint") == source
+            and record.metadata.get("collection_summary_sha256") == summary_hash
+            for record in state.jobs.values()
+        )
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return False
+
+
 def _validate_job_inputs(folder: Path, script: str) -> None:
     for filename in ("INCAR", "POSCAR", "POTCAR", "KPOINTS", script):
+        if filename == "KPOINTS" and not kpoints_required(folder):
+            continue
         path = folder / filename
         if not path.exists() or path.stat().st_size == 0:
             raise FileNotFoundError(f"required submission input is missing or empty: {path}")
 
 
 def _read_incar_tags(path: Path) -> Dict[str, str]:
-    tags: Dict[str, str] = {}
-    for line in Path(path).read_text(encoding="utf-8", errors="ignore").splitlines():
-        clean = line.split("!", 1)[0].split("#", 1)[0]
-        if "=" not in clean:
-            continue
-        key, value = clean.split("=", 1)
-        tags[key.strip().upper()] = value.strip()
-    return tags
+    return parse_incar(Path(path).read_text(encoding="utf-8", errors="ignore"))
 
 
 def _is_geometry_optimization(tags: Dict[str, str]) -> bool:
@@ -1332,7 +1405,10 @@ def _state_has_active_jobs(state: WorkflowState) -> bool:
 
 def _workflow_active_count(state: WorkflowState) -> int:
     active_statuses = {"SUBMITTED", "QUEUED", "RUNNING", "UNKNOWN"}
+    records = list(state.jobs.values())
+    if state.neutral is not None:
+        records.append(state.neutral)
     return sum(
         bool(record.job_id) and record.status in active_statuses
-        for record in state.jobs.values()
+        for record in records
     )

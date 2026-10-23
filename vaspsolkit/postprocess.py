@@ -111,7 +111,10 @@ def postprocess_summary(
     output_dir: Path,
     allow_excluded: bool = False,
 ) -> PostprocessResult:
+    summary_bytes = Path(summary_path).read_bytes()
     rows = read_summary(Path(summary_path))
+    if Path(summary_path).read_bytes() != summary_bytes:
+        raise RuntimeError("summary changed while reading; retry postprocessing")
     if len(rows) != 5:
         raise ValueError(f"constant-potential postprocessing requires exactly five points; found {len(rows)}")
     neutral = [row for row in rows if abs(_float(row, "delta_electrons")) <= 1.0e-9]
@@ -126,8 +129,8 @@ def postprocess_summary(
     output_dir.mkdir(parents=True, exist_ok=True)
     analysis = analyze_rows(rows)
     analysis["provenance"] = _scientific_provenance(rows, analysis)
+    analysis["provenance"]["summary_sha256"] = hashlib.sha256(summary_bytes).hexdigest()
     analysis_path = output_dir / "analysis.json"
-    write_analysis(analysis_path, analysis)
     curve_path = output_dir / "eu_curve.csv"
     _write_curve(curve_path, analysis)
     plot_path = output_dir / "eu_curve.png"
@@ -135,6 +138,8 @@ def postprocess_summary(
     _write_quality_files(output_dir, rows)
     report_path = output_dir / "report.md"
     _write_report(report_path, rows, analysis, excluded)
+    # Publish the freshness marker only after every result was generated.
+    write_analysis(analysis_path, analysis)
     return PostprocessResult(len(rows), analysis_path, curve_path, plot_path, report_path)
 
 

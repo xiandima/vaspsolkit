@@ -24,11 +24,11 @@ classifiers = [
 dependencies = ["matplotlib>=3.5"]
 
 [project.optional-dependencies]
-dev = ["pytest>=7", "build>=1"]
+dev = ["pytest>=7", "build>=1", "setuptools>=68", "wheel"]
 release = ["build>=1"]
 
 [project.scripts]
-vaspsolkit = "vaspsolkit.cli:main"
+vaspsolkit = "vaspsolkit.cli:entrypoint"
 
 [tool.setuptools.packages.find]
 include = ["vaspsolkit*"]

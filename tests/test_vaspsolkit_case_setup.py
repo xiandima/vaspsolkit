@@ -212,11 +212,15 @@ def test_apply_preserves_concurrent_config_created_at_write_boundary(tmp_path, m
     concurrent.scheduler.partition = "concurrent"
     concurrent_bytes = config_module.serialize_kit_config(concurrent)
 
-    def interleaved_write(path, data, **kwargs):
-        config_module.write_kit_config(path, concurrent)
-        return config_module.write_config_bytes(path, data, **kwargs)
+    real_stage = case_setup._stage_file_change
 
-    monkeypatch.setattr(case_setup, "write_config_bytes", interleaved_write, raising=False)
+    def interleaved_stage(change):
+        staged = real_stage(change)
+        if change.path.name == "vaspsolkit.state.json":
+            config_module.write_kit_config(tmp_path / "vaspsolkit.json", concurrent)
+        return staged
+
+    monkeypatch.setattr(case_setup, "_stage_file_change", interleaved_stage)
 
     with pytest.raises(RuntimeError):
         apply_case_initialization(plan, confirmed=True)
@@ -338,7 +342,7 @@ def test_apply_stage_failure_leaves_all_targets_unchanged_and_cleans_temps(
     assert list(tmp_path.glob(".*.tmp")) == []
 
 
-def test_apply_replace_failure_is_per_file_atomic_and_cleans_remaining_temps(
+def test_apply_replace_failure_restores_originals_and_cleans_remaining_temps(
     tmp_path, monkeypatch
 ):
     import vaspsolkit.case_setup as case_setup
@@ -348,6 +352,7 @@ def test_apply_replace_failure_is_per_file_atomic_and_cleans_remaining_temps(
     state = tmp_path / "vaspsolkit.state.json"
     config.write_text("old config\n", encoding="utf-8")
     state.write_text("old state\n", encoding="utf-8")
+    before = {path: path.read_bytes() for path in (tmp_path / "INCAR", config, state)}
     plan = case_setup.plan_case_initialization(tmp_path, _scheduler())
     real_replace = case_setup.os.replace
     calls = 0
@@ -364,10 +369,186 @@ def test_apply_replace_failure_is_per_file_atomic_and_cleans_remaining_temps(
     with pytest.raises(RuntimeError, match="replace") as error:
         case_setup.apply_case_initialization(plan, confirmed=True)
     assert error.value.phase == "replace"
-    assert (tmp_path / "INCAR").read_text(encoding="utf-8") in {plan.incar_before, plan.incar_after}
-    assert config.read_text(encoding="utf-8") == "old config\n" or config.read_text(encoding="utf-8").startswith("{")
-    assert state.read_text(encoding="utf-8") == "old state\n"
+    assert all(path.read_bytes() == data for path, data in before.items())
     assert list(tmp_path.glob(".*.tmp")) == []
+
+
+def _original_targets(root):
+    _write_case(root)
+    targets = {
+        root / "INCAR": (b"# original \xff\r\nENCUT = 450\r\nIBRION = 1\r\nNSW = 88\r\n", 0o640),
+        root / "vaspsolkit.json": (b"original config\r\n", 0o604),
+        root / "vaspsolkit.state.json": (b"original state\r\n", 0o600),
+    }
+    for path, (data, mode) in targets.items():
+        path.write_bytes(data)
+        path.chmod(mode)
+    return targets
+
+
+@pytest.mark.parametrize("failure_target", ["INCAR", "vaspsolkit.state.json"])
+@pytest.mark.parametrize("after_replace", [False, True])
+def test_apply_restores_exact_bytes_and_modes_after_publish_error(
+    tmp_path, monkeypatch, failure_target, after_replace
+):
+    from vaspsolkit import case_setup
+
+    original = _original_targets(tmp_path)
+    plan = case_setup.plan_case_initialization(tmp_path, _scheduler())
+    real_replace = case_setup.os.replace
+    failed = False
+
+    def fail_once(source, target):
+        nonlocal failed
+        if Path(target).name == failure_target and not failed:
+            failed = True
+            if after_replace:
+                real_replace(source, target)
+            raise OSError("injected publication failure")
+        return real_replace(source, target)
+
+    monkeypatch.setattr(case_setup.os, "replace", fail_once)
+    with pytest.raises(case_setup.CaseInitializationApplyError, match="replace"):
+        case_setup.apply_case_initialization(plan, confirmed=True)
+    for path, (data, mode) in original.items():
+        assert path.read_bytes() == data
+        assert path.stat().st_mode & 0o7777 == mode
+    assert list(tmp_path.glob(".*.tmp")) == []
+
+
+def test_apply_success_preserves_existing_permissions(tmp_path):
+    from vaspsolkit import case_setup
+
+    original = _original_targets(tmp_path)
+    plan = case_setup.plan_case_initialization(tmp_path, _scheduler())
+    case_setup.apply_case_initialization(plan, confirmed=True)
+    for path, (_data, mode) in original.items():
+        assert path.stat().st_mode & 0o7777 == mode
+
+
+@pytest.mark.parametrize("fail_sync", [False, True])
+def test_apply_syncs_case_directory_and_rolls_back_sync_failure(tmp_path, monkeypatch, fail_sync):
+    from vaspsolkit import case_setup
+
+    original = _original_targets(tmp_path)
+    plan = case_setup.plan_case_initialization(tmp_path, _scheduler())
+    real_fsync = case_setup.os.fsync
+    directory_syncs = []
+
+    def sync(descriptor):
+        metadata = case_setup.os.fstat(descriptor)
+        if case_setup.stat.S_ISDIR(metadata.st_mode):
+            directory_syncs.append(metadata.st_ino)
+            if fail_sync:
+                raise OSError("injected directory sync failure")
+        return real_fsync(descriptor)
+
+    monkeypatch.setattr(case_setup.os, "fsync", sync)
+    if fail_sync:
+        with pytest.raises(case_setup.CaseInitializationApplyError, match="directory sync failure"):
+            case_setup.apply_case_initialization(plan, confirmed=True)
+        for path, (data, mode) in original.items():
+            assert path.read_bytes() == data
+            assert path.stat().st_mode & 0o7777 == mode
+    else:
+        case_setup.apply_case_initialization(plan, confirmed=True)
+    assert directory_syncs == [tmp_path.stat().st_ino]
+    assert list(tmp_path.glob(".*.tmp")) == []
+
+
+def test_apply_failure_removes_only_its_new_files(tmp_path, monkeypatch):
+    from vaspsolkit import case_setup
+
+    _write_case(tmp_path)
+    before = (tmp_path / "INCAR").read_bytes()
+    plan = case_setup.plan_case_initialization(tmp_path, _scheduler())
+    real_replace = case_setup.os.replace
+
+    def fail_incar(source, target):
+        if Path(target).name == "INCAR":
+            raise OSError("cannot publish INCAR")
+        return real_replace(source, target)
+
+    monkeypatch.setattr(case_setup.os, "replace", fail_incar)
+    with pytest.raises(case_setup.CaseInitializationApplyError):
+        case_setup.apply_case_initialization(plan, confirmed=True)
+    assert (tmp_path / "INCAR").read_bytes() == before
+    assert not (tmp_path / "vaspsolkit.json").exists()
+    assert not (tmp_path / "vaspsolkit.state.json").exists()
+    assert list(tmp_path.glob(".*.tmp")) == []
+
+
+@pytest.mark.parametrize("mutation", ["content", "permissions", "same-bytes-replacement"])
+def test_rollback_preserves_external_changes_and_reports_path(tmp_path, monkeypatch, mutation):
+    from vaspsolkit import case_setup
+
+    original = _original_targets(tmp_path)
+    config = tmp_path / "vaspsolkit.json"
+    state = tmp_path / "vaspsolkit.state.json"
+    plan = case_setup.plan_case_initialization(tmp_path, _scheduler())
+    real_replace = case_setup.os.replace
+    concurrent = {}
+
+    def fail_after_external_edit(source, target):
+        if Path(target) == state:
+            if mutation == "content":
+                config.write_bytes(b"external config\n")
+            elif mutation == "permissions":
+                config.chmod(0o444)
+            else:
+                replacement = tmp_path / "external-config"
+                replacement.write_bytes(config.read_bytes())
+                replacement.chmod(config.stat().st_mode & 0o7777)
+                real_replace(replacement, config)
+            concurrent.update(data=config.read_bytes(), mode=config.stat().st_mode, inode=config.stat().st_ino)
+            raise OSError("state publication failed")
+        return real_replace(source, target)
+
+    monkeypatch.setattr(case_setup.os, "replace", fail_after_external_edit)
+    with pytest.raises(case_setup.CaseInitializationApplyError) as error:
+        case_setup.apply_case_initialization(plan, confirmed=True)
+    assert config.read_bytes() == concurrent["data"]
+    assert config.stat().st_mode == concurrent["mode"]
+    assert config.stat().st_ino == concurrent["inode"]
+    assert str(config) in str(error.value)
+    assert "rollback" in str(error.value)
+    assert error.value.rollback_errors
+    for path in (tmp_path / "INCAR", state):
+        assert path.read_bytes() == original[path][0]
+        assert path.stat().st_mode & 0o7777 == original[path][1]
+
+
+def test_rollback_failure_reports_target_and_retains_original_backup(tmp_path, monkeypatch):
+    from vaspsolkit import case_setup
+
+    original = _original_targets(tmp_path)
+    config = tmp_path / "vaspsolkit.json"
+    plan = case_setup.plan_case_initialization(tmp_path, _scheduler())
+    real_replace = case_setup.os.replace
+    config_written = False
+
+    def fail_publish_and_rollback(source, target):
+        nonlocal config_written
+        if Path(target).name == "INCAR":
+            raise OSError("cannot publish INCAR")
+        if Path(target) == config:
+            if config_written:
+                raise PermissionError("cannot restore configuration")
+            config_written = True
+        return real_replace(source, target)
+
+    monkeypatch.setattr(case_setup.os, "replace", fail_publish_and_rollback)
+    with pytest.raises(case_setup.CaseInitializationApplyError) as error:
+        case_setup.apply_case_initialization(plan, confirmed=True)
+    assert str(config) in str(error.value)
+    assert "rollback" in str(error.value)
+    assert "cannot restore configuration" in str(error.value)
+    assert error.value.rollback_errors
+    backups = list(tmp_path.glob(".vaspsolkit.json.*.tmp"))
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == original[config][0]
+    assert backups[0].stat().st_mode & 0o7777 == original[config][1]
+    assert str(backups[0]) in str(error.value)
 
 
 @pytest.mark.parametrize(

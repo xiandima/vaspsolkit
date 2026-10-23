@@ -39,22 +39,25 @@ def test_default_configuration_uses_slurm_local_server_profile() -> None:
     assert config.scheduler.modules == []
 
 
-def test_readme_documents_slurm_workflow_and_confirmation_contract() -> None:
+def test_user_guides_document_slurm_workflow_and_confirmation_contract() -> None:
     readme = Path("README.md").read_text(encoding="utf-8")
+    guide = Path("docs/USER_GUIDE.md").read_text(encoding="utf-8")
+    cluster = Path("docs/CLUSTER_CONFIGURATION.md").read_text(encoding="utf-8")
 
-    assert "vaspsolkit menu" in readme
+    assert "vaspsolkit menu" in guide
     assert "02" in readme and "推荐下一步" in readme
     assert "SUBMIT" in readme
-    assert "CANCEL" in readme
+    assert "CANCEL" in guide
     assert "只查询当前 Case" in readme
-    assert "自动分配节点" in readme
+    assert "自动分配" in readme
     assert "指定节点" in readme
-    assert "分区 -> 分区内节点" in readme
+    assert "先选分区" in readme and "该分区的节点" in readme
     assert "compute" in readme and "96" in readme and "72:00:00" in readme
-    assert "mpirun -np 96 vasp_std" in readme
-    assert "squeue" in readme and "sacct" in readme
-    assert "configure-reference" in readme
-    assert "默认不复制、不读取 `WAVECAR`" in readme
+    assert "mpirun -np 96 vasp_std" in cluster
+    assert "squeue" in guide and "sacct" in guide
+    assert "configure-reference" in guide
+    assert "不读取 WAVECAR" in readme
+    assert "不复制或读取 WAVECAR" in guide
 
 
 def test_runtime_has_no_builtin_pbs_implementation() -> None:
@@ -98,6 +101,13 @@ def test_ci_runs_release_build_and_public_leak_gate() -> None:
     assert "tools/build_release.py" in workflow
     assert "test_public_release.py" in workflow
     assert "PUBLIC_RELEASE_ARTIFACTS" in workflow
+
+
+def test_ci_installed_smoke_check_runs_outside_source_tree() -> None:
+    workflow = Path(".github/workflows/tests.yml").read_text(encoding="utf-8")
+    assert "working-directory: /tmp" in workflow
+    assert "is_relative_to" in workflow
+    assert "vaspsolkit-install" in workflow
 
 
 def test_built_release_artifacts_have_no_private_paths() -> None:

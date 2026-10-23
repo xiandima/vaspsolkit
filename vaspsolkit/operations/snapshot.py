@@ -11,6 +11,7 @@ from ..config import KitConfig, SchedulerConfig, WorkflowConfig, load_kit_config
 from ..guide_model import build_snapshot, recommend_action
 from ..inputs import potcar_elements, poscar_elements
 from ..orchestrator import STATE_FILENAME
+from ..sampling import describe_sampling, kpoints_required
 from ..scheduler import JobState
 from ..state import JobRecord, WorkflowState
 from .i18n import tr
@@ -297,6 +298,12 @@ def _input_row(root: Path, name: str, required: bool, scheduler, role: str) -> I
     path = _safe_case_path(root, name)
     if path is None:
         return InputCheckRow(name, root, False, "ERROR", required, "configured path is unsafe", role)
+    if name == "KPOINTS":
+        try:
+            if not kpoints_required(root):
+                return InputCheckRow(name, path, False, "READY", False, describe_sampling(root), role)
+        except (OSError, ValueError) as exc:
+            return InputCheckRow(name, path, False, "ERROR", required, str(exc), role)
     if not path.exists():
         return InputCheckRow(name, path, False, "MISSING", required, "file is missing", role)
     if not path.is_file():
@@ -318,7 +325,7 @@ def _validate_input(root: Path, name: str, text: str, data: bytes, scheduler, ro
     if name == "POTCAR":
         return _validate_potcar(root, text)
     if name == "KPOINTS":
-        return _validate_kpoints(text)
+        return _validate_kpoints(text) + "; " + describe_sampling(root)
     if role == "script":
         return _validate_script(text, data, scheduler)
     if name == "INCAR":
@@ -415,14 +422,12 @@ def _validate_kpoints(text: str) -> str:
     if re.sub(r"[\s_-]+", "", lines[2]).lower() == "linemode":
         return _validate_line_mode_kpoints(lines, count)
     if count == 0:
-        if len(lines) < 5:
-            raise ValueError("automatic KPOINTS requires mode, grid, and shift")
         mode = lines[2].split()[0]
         if not mode.lower().startswith(("g", "m")):
             raise ValueError("automatic KPOINTS mode must be Gamma or Monkhorst-Pack")
         try:
             grid = tuple(int(value) for value in lines[3].split()[:3])
-            shift = tuple(float(value) for value in lines[4].split()[:3])
+            shift = tuple(float(value) for value in lines[4].split()[:3]) if len(lines) >= 5 else (0.0, 0.0, 0.0)
         except ValueError as exc:
             raise ValueError("automatic KPOINTS grid or shift is invalid") from exc
         if len(grid) != 3 or len(shift) != 3 or any(value <= 0 for value in grid) or not all(math.isfinite(value) for value in shift):

@@ -17,7 +17,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: python -m pip install --upgrade pip
-      - run: python -m pip install . pytest
+      - run: python -m pip install ".[dev]"
       - run: python -m pytest -q
 
   release:
@@ -28,7 +28,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: python -m pip install --upgrade pip
-      - run: python -m pip install . pytest build
+      - run: python -m pip install ".[dev]"
       - name: Check public release contents
         run: python -m pytest -q tests/test_public_release.py tests/test_release_build.py
       - name: Build release artifacts
@@ -36,6 +36,8 @@ jobs:
       - name: Scan release artifacts
         run: PUBLIC_RELEASE_ARTIFACTS=/tmp/vaspsolkit-release python -m pytest -q tests/test_public_release.py
       - name: Verify isolated wheel install
+        working-directory: /tmp
         run: |
           python -m pip install --no-deps --target /tmp/vaspsolkit-install /tmp/vaspsolkit-release/*.whl
+          PYTHONPATH=/tmp/vaspsolkit-install python -c 'from pathlib import Path; import vaspsolkit; assert Path(vaspsolkit.__file__).resolve().is_relative_to(Path("/tmp/vaspsolkit-install"))'
           PYTHONPATH=/tmp/vaspsolkit-install python -m vaspsolkit --help

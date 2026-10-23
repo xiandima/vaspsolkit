@@ -1,306 +1,204 @@
 # VASPsolKit
 
+在 SSH 终端中，用编号菜单完成 **输入准备 → 中性计算 → 五点电荷扫描 → 收敛检查 → E-U 图与报告**。
+不需要提前算好中性参考，也不需要记住整套命令；每个体系用一个独立计算目录，程序提示下一步。
+
+适合使用 VASP/VASPsol、在 Linux 集群上计算的用户。内置支持 **SLURM**，VASPKIT 可选。
+这里的工作方式是固定 `NELECT` 扫描后建立能量与电势的关系，不是运行中自动调电子数的恒电势求解器。
+
+> 当前为 `0.4.0` 开发版，尚未发布对应正式版本。首次换服务器或计算方法，请先用小体系验证。
+> VASP/VASPsol、合法赝势和服务器运行环境由你提供。
+
 [在线用户手册](https://xiandima.github.io/vaspsolkit/) · [第一次计算](https://xiandima.github.io/vaspsolkit/quickstart.html) · [E-U 结果示例](https://xiandima.github.io/vaspsolkit/results.html)
 
-> 在线手册对应 `0.4.0` 开发快照，部分功能尚未合入本分支；安装前请核对[手册版本说明](https://xiandima.github.io/vaspsolkit/versions.html)。
+在线手册从通过测试的 GitHub `main` 自动构建，与同次提交的程序同步；
+对应提交可在[版本说明](https://xiandima.github.io/vaspsolkit/versions.html)核对。
+文档源码入口见[用户手册首页](docs/index.md)。
 
-VASPsolKit 是面向 VASP/VASPsol 固定 NELECT 扫描与电势后处理的状态驱动终端工作流。它把中性结构优化、
-带电点准备、SLURM 提交、收敛检查、结果收集和五点 E-U 拟合组织为可恢复的 Case。
+## 1. 安装一次
 
-当前工作树版本号为 `0.4.0`，未发布变更见 [CHANGELOG](CHANGELOG.md)，发布状态以 tag/release 为准。
-内置支持 **SLURM**，并保留 custom scheduler 接口。内置 PBS 支持已经
-移除。任务提交后程序立即返回，不会在前台等待 VASP 计算结束。
-
-> **Alpha 软件。** 本项目不提供 VASP、VASPsol、POTCAR 或机构专属模块配置。首次使用
-> 请先用小体系验证 INCAR、赝势、VASPsol 版本和 SLURM 资源参数。
-
-## 安装
-
-需要 Python 3.9 或更高版本：
+需要 Python 3.9 或更新版本。服务器可联网时，在终端运行：
 
 ```bash
+git clone https://github.com/xiandima/vaspsolkit.git
+cd vaspsolkit
+python -m venv "$HOME/.venvs/vaspsolkit"
+source "$HOME/.venvs/vaspsolkit/bin/activate"
 python -m pip install .
-
-# 开发环境
-python -m pip install -e ".[dev]"
+vaspsolkit --help
 ```
 
-离线安装需要同时准备依赖。在与目标集群兼容的 Python/操作系统环境中，先安装开发依赖，再构建当前工作树并下载依赖：
+已有源码可跳过前两行，在源码目录安装。以后重新登录，只需激活同一个环境：
 
 ```bash
-python -m pip wheel --no-deps --no-build-isolation --wheel-dir /tmp/vaspsolkit-wheelhouse .
-python -m pip download --dest /tmp/vaspsolkit-wheelhouse /tmp/vaspsolkit-wheelhouse/vaspsolkit-*.whl
+source "$HOME/.venvs/vaspsolkit/bin/activate"
 ```
 
-传输整个 wheelhouse 到集群后安装：
+服务器不能联网、不能使用 venv、需要升级或出现旧版菜单？见[安装与升级](docs/INSTALLATION.md)。
+计算请在自己的计算目录运行，不要放在源码目录里。
 
-```bash
-python -m pip install --no-index --find-links /path/to/wheelhouse vaspsolkit
-```
+## 2. 准备一个体系
 
-`--no-deps` 安装只适用于依赖已齐全的环境。维护者脚本 `tools/build_release.py` **只打包
-已提交的 HEAD**，不包含当前未提交修订，不能用它验证脏工作树的修复内容。
+新建一个目录，例如 `my-case`。本文把这样的独立计算目录称为 **Case**。
 
-## Case 输入
+| 你准备什么 | 用途 |
+| --- | --- |
+| `POSCAR` | 初始结构，包含元素名称行；不要求已经收敛 |
+| `INCAR` 或已有 INCAR 模板 | 你的计算参数；初始化时会显示关键参数并允许修改 |
+| `vasp.slurm` | 当前服务器上可用的提交脚本，放在 Case 内 |
+| `POTCAR` 或合法赝势库的位置 | 已有 POTCAR 直接使用；缺失时按你确认的元素变体生成 |
+| `KPOINTS` 或 INCAR 中的 `KSPACING` | 二选一；都没有时由补全步骤询问采样方式 |
 
-不需要提前算好中性参考。每个体系使用独立目录，菜单入口需要以下输入：
+已有四个 VASP 输入文件的用户，目录如下，可直接进入下一步：
 
 ```text
 my-case/
 ├── POSCAR
 ├── INCAR
-├── KPOINTS
 ├── POTCAR
+├── KPOINTS          # 已明确设置有效 KSPACING 时可省略
 └── vasp.slurm
 ```
 
-- `POSCAR` 是中性优化的初始结构。
-- `POTCAR` 顺序必须与 `POSCAR` 一致；不要将 POTCAR 提交到公开仓库。
-- 已有 `INCAR` 且 CLI 不指定 `--profile` 时保留用户设置；必要 VASPsol 标签冲突会阻止初始化。
-- 显式指定 profile 会覆盖其中的标签，再应用 `--set TAG=VALUE`，须逐项检查差异。
-- 中性点默认 `ISTART=0, ICHARG=2`。
-- 带电点读取中性 `CHGCAR`，默认 `ISTART=0, ICHARG=1`。
-- 默认不复制、不读取 `WAVECAR`；只有用户明确启用时才允许使用。
-
-CLI `init` 可以按 profile 生成缺失的 INCAR；交互模式下缺失 POTCAR/KPOINTS 可调用本机
-VASPKIT 辅助生成，仍须配置自己的赝势库。`--yes` 不会自动解决这些缺失输入。
-POTCAR 校验要求 POSCAR 包含 VASP5 元素行。缺失 ENCUT 的建议来自 POTCAR ENMAX；
-保留已有 INCAR 的路径不会自动填入该建议。VASPKIT 不是内置 E-U 收集器的功函数后端。
-
-程序自带的 INCAR profile 会补充或更新一组计算参数，其中包括 VASPsol 模型参数。使用前
-必须阅读[计算约定](docs/SCIENTIFIC_CONVENTIONS.md)，并在预览中确认每一项差异；这些默认值
-不是适用于所有溶剂、温度、离子强度或泛函的通用物理常数。
-
-## SLURM 起始配置
-
-```text
-partition       compute
-nodes           1
-tasks           96
-tasks-per-node  96
-walltime        72:00:00
-script          vasp.slurm
-launcher        mpirun
-executable      vasp_std
-```
-
-这些值未经修改时会实际用于提交，并非只显示在预览中；它们不是跨服务器推荐资源。首次使用必须根据本机
-`sinfo`、队列政策和 VASP 编译方式重新确认。默认运行命令等价于
-`mpirun -np 96 vasp_std`；也可以保留 `compute` 自动分配或先选分区、再指定该分区中的
-节点。
-
-便携模板位于 [`templates/slurm.vasp.sh`](templates/slurm.vasp.sh)。模板本身不再硬编码
-分区、节点、核数和 walltime，这些参数由 VASPsolKit 在 `sbatch` 命令中显式传入。
-受管理的 SLURM profile 目前只支持 `mpirun` + `vasp_std`，不能直接改成 `srun` 或 GPU
-VASP。服务器模块、账户和接口边界见[集群配置](docs/CLUSTER_CONFIGURATION.md)。
-
-## 快速开始
+只有结构、模板和脚本也能开始，不用先手算中性点：
 
 ```bash
-cd /path/to/my-case
+cd "/path/to/my-case"
+vaspsolkit inputs --incar-template "/path/to/INCAR.template" --save-settings
+```
+
+将示例路径换成实际路径。程序会询问缺失输入需要的信息：赝势库目录、泛函、元素变体和采样，
+显示将生成的文件后再请你确认。已有输入不会被补全操作覆盖。
+`--save-settings` 保存确认过的赝势等设置，下一体系可复用；结构和显式网格不会跨体系照搬。
+通过菜单补全时也会询问是否保存，默认不保存。
+
+**没有 VASPKIT 也能使用。** 默认由程序拼接确认的赝势并生成显式网格；已安装 VASPKIT 1.5.x
+时可选其自动补全。具体选择和示例见[输入准备](docs/USER_GUIDE.md#输入准备)。
+如果 KPOINTS 和 KSPACING 同时存在，以 KPOINTS 为准。
+
+## 3. 打开菜单，开始计算
+
+在 Case 目录执行：
+
+```bash
 vaspsolkit
-
-# 或显式指定目录
-vaspsolkit menu --workdir /path/to/my-case
 ```
 
-新手通常只需反复选择 `02` 执行推荐下一步。状态跟踪只查询当前 Case 状态文件中记录的 Job
-ID；plan/资源查看可读取队列快照，但不会因此认领其他任务，也不会在启动时自动提交或取消任务。
+第一次使用按下面的顺序操作。不必记住全部编号，通常选择 **`02` 执行推荐下一步**即可；
+拟合前请另外选择 `61` 查看详细审计。
 
-## 资源选择
+| 阶段 | 你需要做什么 | 完成后 |
+| --- | --- | --- |
+| 补齐输入 | 缺输入时选 `14`，按提示填写模板、赝势和采样 | 输入齐全，可以初始化 |
+| 初始化 | 选 `11` 或 `02`；选调度器、确认脚本、SHE 参考值与来源、INCAR 参数 | 保存 Case 配置，不提交计算 |
+| 准备中性计算 | 选 `20` 或 `02`，核对准备后的 INCAR | 生成中性任务记录 |
+| 提交中性任务 | 选 `21` 或 `02`，核对资源并输入 `SUBMIT` | 显示 Job ID，返回菜单 |
+| 等待与检查 | 选 `40` 看状态，结束后选 `22` 检查收敛 | 通过后允许准备五点 |
+| 准备与提交五点 | 依次选 `30`、`31`、`32`，或按 `02` 的推荐操作 | 提交选定的扫描点 |
+| 收集与审查 | 各点完成后选 `50` 检查，再选 `60` 收集、`61` 审计 | 查看异常点与重算建议 |
+| 生成曲线 | 审查通过后选 `62` | 得到五点 E-U 图、数据和报告 |
 
-提交前有两种分配模式：
+初始化时保留已有 INCAR 的用户设置，并检查必要 VASPsol 标签；冲突会提示你处理。
+后续准备步骤仍会应用对应阶段设置，请核对生成的 INCAR，尤其是自旋、优化与溶剂参数。
+SHE 参考值应与你的方法一致，界面起始值不是通用常数，见[计算约定](docs/SCIENTIFIC_CONVENTIONS.md)。
 
-1. **自动分配节点**：默认使用 `compute` 分区，由 SLURM 选择节点。
-2. **指定节点**：先选择分区，再通过 `sinfo` 列出该分区内节点，最后选择具体节点。
+### 提交前，确认自己的服务器资源
 
-指定节点必须属于已选分区。提交通过 `sbatch` 显式传递 `--partition`、`--nodes`、
-`--ntasks`、`--ntasks-per-node` 和 `--time`；指定节点时再传递 `--nodelist`。
+提交界面提供自动分配或指定节点：
 
-菜单中资源修改默认只影响本次提交，另行确认保存后才写入配置。菜单提交要求精确输入
-`SUBMIT`，取消要求 `CANCEL`；普通 CLI 确认一般为 `y/yes`。支持 `--yes` 的命令会跳过
-确认，不能当成无害预览开关。
+- **自动分配**：选择分区，由 SLURM 分配节点。
+- **指定节点**：先选分区，再从该分区的节点列表中选择节点。
+- 核对 MPI tasks、walltime 和脚本；需要长期复用时，再确认保存为本 Case 的默认值。
 
-```bash
-vaspsolkit configure-scheduler --workdir /path/to/my-case
-```
+初始配置是 `compute / 1 节点 / 96 tasks / 72:00:00`，**不是通用推荐值**。提交前按本机修改，
+这些资源设置可能覆盖脚本中的同名 `#SBATCH` 选项。内置受管理启动方式是 `mpirun + vasp_std`；
+模块、账户、内存、QOS 等放在你自己的脚本中。换服务器、使用其他启动方式或非 SLURM 系统，
+先看[服务器适配](docs/CLUSTER_CONFIGURATION.md)。
 
-该命令是指定节点配置入口，遵循“分区 -> 分区内节点 -> tasks -> walltime”的顺序，校验后
-立即保存，不是菜单的自动分配选择。若登录节点无法连接 SLURM
-控制器，命令会失败并保留原配置，不会猜测节点状态。
+### 任务很长，可以退出吗？
 
-## 标准流程
+可以。提交后程序不等待 VASP 算完；选 `00` 退出不会取消服务器任务。下次进入**同一目录**
+重新运行 `vaspsolkit`，会读取记录并继续推荐下一步。已有 Case 不要重新初始化或删除状态文件。
+任务跟踪只查询当前 Case 已记录的 Job ID，不会认领你在其他目录提交的作业。
 
-以下命令分阶段执行，不是一段可连续提交到底的脚本。任务提交后返回，须等待结束并
-检查通过再进入下一阶段；自定义结果目录或扫描目录名后也须调整示例路径。
+`02` 每次只执行一个动作，**不会在你退出后自动提交下一阶段**。限制了同时在途任务数
+`max_inflight` 时，剩余点也需回来再次提交。状态为 `UNKNOWN` 时先核对队列，不要直接重提。
 
-### 1. 初始化
+## 4. 到哪里看结果
 
-```bash
-vaspsolkit init --workdir /path/to/my-case
-vaspsolkit configure-reference --workdir /path/to/my-case
-vaspsolkit plan --workdir /path/to/my-case
-```
-
-初始化执行文件级预检，包括必要输入、提交脚本、POTCAR 元素顺序和关键 INCAR 参数，
-并生成 `vaspsolkit.json`。这不等同于技术收敛或科学有效性检查。SHE 数值要确认；来源
-虽然可以在界面留空，科研使用仍应填写。`workflow.method_fingerprint` 目前须手动填写，
-是经人工核对的方法记录标识，不是自动从实际输入生成的文件指纹。示例将它留空，不能
-用占位字符串冒充核验结果，具体记录项目见[计算约定](docs/SCIENTIFIC_CONVENTIONS.md)。
-
-### 2. 中性计算
-
-```bash
-vaspsolkit prepare-neutral --workdir /path/to/my-case
-vaspsolkit submit-neutral --workdir /path/to/my-case --dry-run
-vaspsolkit submit-neutral --workdir /path/to/my-case
-vaspsolkit monitor --workdir /path/to/my-case
-vaspsolkit check-neutral --workdir /path/to/my-case
-```
-
-`monitor` 默认只刷新一次，加 `--watch` 可持续查看。提交后须等待结束，再执行
-`check-neutral`。中性任务需要可用的 `OUTCAR/CONTCAR/CHGCAR/LOCPOT`；CHGCAR 作为
-扫描点默认初猜。文件存在、正常结束、技术收敛和科学可比性是不同层次。
-
-### 3. 五点带电扫描
-
-```bash
-vaspsolkit prepare-charge --workdir /path/to/my-case
-vaspsolkit check-prepared --workdir /path/to/my-case
-vaspsolkit submit-selected --workdir /path/to/my-case 1 2 3 4 5 --dry-run
-vaspsolkit submit-selected --workdir /path/to/my-case 1 2 3 4 5
-```
-
-默认偏移为 `[-1.0, -0.5, 0.0, 0.5, 1.0]`，必须恰好包含一个中性点。拟合不会静默
-删除中性点，也不会自动退化为四点拟合。
-
-默认扫描目录 `3` 是中性点，根目录中性准备任务不替代它，通常共需 **1+5 个任务**。
-五点均默认从中性 CHGCAR 启动。默认 charge-relax 会优化各点结构，拟合前要人工核对
-构型和磁态连续性。设置 `max_inflight` 时一次仅提交可容纳的批次，后续需再次操作。
-
-### 4. 检查与修复
-
-```bash
-vaspsolkit status --workdir /path/to/my-case
-vaspsolkit check --workdir /path/to/my-case
-vaspsolkit repair --workdir /path/to/my-case --job 3 --no-submit
-```
-
-状态查询先使用 `squeue`，已离开队列的任务再使用 `sacct` 查询历史状态和 ExitCode。
-SLURM 查询失败时状态为 `UNKNOWN`，程序不会因此重复提交。`repair` 展示差异并询问，
-拒绝才是仅预览。上例确认后会归档旧输出、修改输入，但不提交；省略 `--no-submit` 会
-尝试提交可就绪的批次，可能不止修复的一个点，须查看任务列表。默认先尝试中性 CHGCAR，
-再尝试全新电荷密度，不自动启用 WAVECAR。
-
-### 5. 收集与后处理
-
-```bash
-vaspsolkit collect --workdir /path/to/my-case
-vaspsolkit audit --workdir /path/to/my-case
-vaspsolkit postprocess \
-  --summary /path/to/my-case/results/summary.csv \
-  --output /path/to/my-case/results/eu
-```
-
-`collect` 生成 `results/summary.csv`，`audit` 重新收集并生成详细的
-`quality_report.csv/points_to_rerun.csv`。先审查它们，再拟合。
-
-`postprocess` 在 `results/eu/` 生成 `analysis.json`、`eu_curve.csv`、`eu_curve.png`、
-`report.md` 和仅按 CSV 纳入/收敛标志生成的简要质量报告；它不复制或生成 summary.csv，
-也不重新检查 OUTCAR。**不要与 audit 使用同一输出目录，否则详细审计会被同名简表覆盖。**
-重复使用同一输出目录也会覆盖旧图；菜单版本化后处理则保存到 `results/history/<run-id>/`，
-附带 summary 副本、SHA256 和分析记录。
-
-报告包含二次顶点 `U_vertex`、另一个 `q(U)=0` 线性拟合估计、系数、R2、RMSE 和最大残差。
-二次顶点不无条件等于 PZC。默认五点门槛要求唯一中性点且全部纳入；显式
-`--allow-excluded` 仅用于诊断，图例和报告注明数量与排除目录，不满足五点验收。
-低层 `analyze` 没有同样的五点检查，不能替代此步骤。缺失质量标志的手工 CSV 可能按
-默认值纳入，也不能因此当成已验证数据。
-
-当前内置收集器采用：
+默认目录如下；如果改过结果路径，以自己的配置为准：
 
 ```text
-V_ref    = max(planar_average(neutral_LOCPOT))
-U_vs_SHE = V_ref - E_Fermi - E_abs(SHE)
-E(U)     = TOTEN - delta_electrons * E_Fermi
+my-case/results/
+├── summary.csv              # 各扫描点的原始汇总
+├── quality_report.csv       # 61：详细质量审计
+├── points_to_rerun.csv       # 61：建议检查或重算的点
+└── eu/
+    ├── eu_curve.png         # 62：E-U 图
+    ├── eu_curve.csv         # 拟合曲线数据
+    ├── analysis.json        # 原始点、系数、拟合范围与来源
+    ├── report.md            # 顶点、R²、RMSE、最大残差等
+    ├── quality_report.csv   # 仅基于汇总表标志的拟合检查
+    └── points_to_rerun.csv  # 拟合层的排除/重算提示
 ```
 
-它记录 `fermi_shift_handling=not-applied`，不自动实现原始 VASPsol 输出中的
-`FERMI_SHIFT` 对齐。若所用 VASPsol 版本要求该修正，不得把当前结果直接解释为已完成修正；
-应使用独立、可追溯的处理分支。当前通用 CSV 后处理会固定写入默认约定标签，并非任意
-外部校正数据的安全导入器。平面均值最大值也不等于已经识别真空平台；这些限制、
-TOTEN 与自由能的区别见[计算约定](docs/SCIENTIFIC_CONVENTIONS.md)。
+查看顺序：**详细质量审计 → 原始五个点 → E-U 图与残差**。再次拟合会更新 `eu/` 下同名文件；
+需要保留旧图时先备份，或在直接命令中指定新的输出目录。
 
-## Reaction Spec
+默认电子数偏移为 `[-1.0, -0.5, 0.0, 0.5, 1.0]`，拟合必须含唯一中性点，不会静默删点。
+根目录中性准备计算之外，扫描中还有独立中性点，通常总共是 **1 + 5 个任务**。
+默认中性计算用全新密度，五点用中性 CHGCAR 初猜，**不读取 WAVECAR**。
 
-反应层独立于通用 VASP I/O。受限表达式解析器可以组合多个体系的 `analysis.json`，不会
-使用 `eval`，也不会在核心代码中硬编码特定反应：
+使用结果前还需注意：当前电势处理取中性 LOCPOT 平面均值的最大值，不自动识别真空平台，
+也不应用 `FERMI_SHIFT`；拟合顶点不自动等于 PZC，电子能量不自动等于完整 Gibbs 自由能。
+应先确认你的 VASPsol 分支与[计算约定](docs/SCIENTIFIC_CONVENTIONS.md)相符。
+
+### 多个体系的吸附能或反应曲线
+
+每个体系先单独完成 E-U 分析，再用独立的 Reaction Spec 组合结果；通用工作流不绑定某一种反应。
+修改[反应配置示例](examples/reaction-spec.example.json)中的路径、公式和常数后运行：
 
 ```bash
-vaspsolkit reaction \
-  --spec /path/to/reaction.json \
-  --output /path/to/reaction-results
+vaspsolkit reaction --spec "/path/to/reaction.json" --output "/path/to/reaction-results"
 ```
 
-例如可表达 `E("*N2O2", U) - E("*NO", U) - G_NO`。
+例如可使用 `E("*N2O2", U) - E("*NO", U) - G_NO`。需要先记录各体系的方法并核对共同电势范围；
+如何填写与查看输出见[反应分析](docs/USER_GUIDE.md#反应分析)。
 
-先修改[示例](examples/reaction-spec.example.json)的源文件路径、常数和网格；路径相对于 spec
-文件，示例不附真实结果。输出 `reaction_curves.csv/png` 和 `reaction_report.md`。
+## 常用入口
 
-reaction 默认要求所有 `analysis.json` 具有一致的 SHE reference、potential convention、
-energy convention、FERMI_SHIFT handling 和 `method_fingerprint`，并要求绘图区间位于各体系
-共同拟合范围内。旧数据只能通过 `compatibility.allow_unknown_provenance=true` 显式放行；
-外推也必须通过 `compatibility.allow_extrapolation=true` 显式确认。默认纵轴称为 electronic
-energy expression；只有明确加入 ZPE、熵及其他自由能修正后，才应改称 Gibbs free energy。
-相同字符串不证明实际输入一致。启用豁免时报告明确记录开关、输入、常数和公式，不再
-标记为严格检查通过。化学计量、单位和标准态仍需人工验证，见[反应边界](docs/SCIENTIFIC_CONVENTIONS.md#反应层边界)。
+| 编号 | 菜单名称 | 什么时候用 |
+| --- | --- | --- |
+| `02` | 执行推荐下一步 | 不确定下一步做什么 |
+| `03` | 查看完整状态与诊断 | 出错、卡住或需要查看任务记录 |
+| `14` | 补齐输入：模板、赝势与采样 | 缺少 INCAR、POTCAR 或采样设置 |
+| `61` | 结果审计 | 拟合前检查计算质量 |
+| `62` | 后处理与 E-U 分析 | 生成或重新生成五点拟合 |
+| `00` | 退出 | 保留记录，下次继续 |
 
-## 配置迁移
-
-当前格式为 `config_version: 2`：
+不想进入菜单，也可以在终端执行：
 
 ```bash
-vaspsolkit migrate --input /path/to/old-slurm.json --output /path/to/new-vaspsolkit.json
+vaspsolkit next --dry-run   # 只看本地记录建议的下一步，不查询队列或提交
+vaspsolkit next             # 交互执行一步；写入和提交仍会确认
+vaspsolkit status          # 查询当前 Case 的任务状态
+vaspsolkit monitor --watch # 持续查看，Ctrl-C 停止查看
 ```
 
-- 旧 SLURM v1 配置可以迁移到 v2，写入前显示差异并采用原子替换。
-- 覆盖另一个已存在的目标须加 `--force`；原地迁移仍需确认。
-- 旧 PBS 配置不会自动翻译，因为资源和节点语义无法可靠一一对应。
-- 遇到 PBS 配置时，请导入或填写当前服务器的 SLURM profile 后重新初始化调度部分。
+批处理没有交互终端时，使用参数明确的子命令，不要把菜单答案用管道硬塞进去。
+`--yes` 表示同意执行，**不是预览**；提交预览使用 `--dry-run`。
 
-## Custom scheduler
+## 遇到问题与更多用法
 
-非 SLURM 系统可使用 `kind: custom`，配置提交、查询、取消命令模板和 Job ID 正则。custom
-模式不具备 SLURM 分区与节点检查能力，也不承诺整套 SLURM 菜单可直接复用；它是低层
-命令适配接口，提交前仍需显式确认，详见[集群配置](docs/CLUSTER_CONFIGURATION.md)。
+- 命令找不到、离线安装、升级后仍是旧菜单：[安装与升级](docs/INSTALLATION.md)。
+- 缺赝势、KSPACING/VASPKIT、批处理、失败任务恢复：[使用手册](docs/USER_GUIDE.md)。
+- 换服务器、指定节点、自定义调度器：[服务器适配](docs/CLUSTER_CONFIGURATION.md)。
+- 曲线异常、能量公式、SHE/PZC 与反应方法：[计算约定](docs/SCIENTIFIC_CONVENTIONS.md)。
+- 已验证平台和当前限制：[兼容性说明](docs/COMPATIBILITY.md)。
+- 报告问题或参与开发：[CONTRIBUTING](CONTRIBUTING.md)；版本变化：[CHANGELOG](CHANGELOG.md)。
 
-## Durable submission 屏障
+不要在公开 issue 中上传 POTCAR、凭据或未公开计算数据。
 
-程序在调用 `sbatch` 前保存提交意图，收到合法数字 Job ID 后记录接受状态，再原子更新
-Case。若出现 `SUBMITTING`、`ACCEPTED`、`SUBMIT_UNKNOWN` 或回执损坏：
+## 许可
 
-1. 不要再次提交；
-2. 使用 `vaspsolkit menu` 查看恢复屏障；
-3. 人工通过 `squeue`/`sacct` 核对真实 Job ID；
-4. 使用恢复操作录入 Job ID，或确认未创建任务。
-
-## 开发验证
-
-```bash
-python -m pytest -q
-python -m compileall -q vaspsolkit tests
-python -m build --wheel --no-isolation
-```
-
-活动记录默认位于 `${XDG_STATE_HOME:-~/.local/state}/vaspsolkit/cases`。CI 或只读 HOME 可
-通过 `VASPSOLKIT_STATE_ROOT=/path/to/state` 指定隔离目录。测试自行覆盖部分默认路径，
-运行整套测试时不宜全局强设该变量。
-
-贡献前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md) 和
-[公开发布范围](docs/maintainer/PUBLIC_RELEASE_SCOPE.md)。本轮问题与修正对应见[文档审查记录](docs/DOCUMENTATION_AUDIT.md)。
-
-## License
-
-[MIT](LICENSE)
-
-Repository: [github.com/xiandima/vaspsolkit](https://github.com/xiandima/vaspsolkit)
+[MIT License](LICENSE)。VASP、VASPKIT 及赝势各自的授权条款不随本项目改变。

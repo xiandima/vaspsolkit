@@ -6,10 +6,13 @@ current on-disk case state into one user-facing recommended action.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import json
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
 from .tui_model import BASE_INPUTS, CaseSnapshot, action_effect, inspect_case
+from .orchestrator import collection_is_current
 
 
 @dataclass(frozen=True)
@@ -17,6 +20,7 @@ class GuideSnapshot:
     case: CaseSnapshot
     missing_base_inputs: Tuple[str, ...]
     has_config: bool
+    collection_current: bool = True
 
 
 @dataclass(frozen=True)
@@ -41,6 +45,7 @@ def build_snapshot(workdir: Path, config_path: Optional[Path] = None) -> GuideSn
         case=case,
         missing_base_inputs=missing_base,
         has_config=case.config_path.is_file(),
+        collection_current=case.config is not None and collection_is_current(case.workdir, case.config),
     )
 
 
@@ -51,8 +56,8 @@ def recommend_action(snapshot: GuideSnapshot) -> GuideAction:
             name="fix-inputs",
             title_zh="补齐基础输入文件",
             reason_zh="当前 case 缺少基础 VASP 输入：" + ", ".join(snapshot.missing_base_inputs),
-            effect="read-only",
-            cli_command=None,
+            effect="file-changing",
+            cli_command="inputs",
             enables_zh="初始化 workflow 配置",
         )
     if not snapshot.has_config:
@@ -153,6 +158,21 @@ def recommend_action(snapshot: GuideSnapshot) -> GuideAction:
             enables_zh="带电点计算执行",
         )
     if statuses and all(status == "CONVERGED" for status in statuses.values()):
+        if snapshot.collection_current and case.results_available and case.reference_results_status == "current" and case.config is not None:
+            results = case.workdir / case.config.workflow.results_root
+            summary = results / case.config.workflow.summary_file
+            fit_dir = results / "eu"
+            try:
+                analysis = json.loads((fit_dir / "analysis.json").read_text(encoding="utf-8"))
+                current = analysis.get("provenance", {}).get("summary_sha256") == hashlib.sha256(summary.read_bytes()).hexdigest()
+                current = current and all((fit_dir / name).is_file() and (fit_dir / name).stat().st_size for name in (
+                    "eu_curve.csv", "eu_curve.png", "report.md", "quality_report.csv", "points_to_rerun.csv",
+                ))
+            except (OSError, ValueError, AttributeError, TypeError):
+                current = False
+            if current:
+                return GuideAction("results-ready", "查看已生成结果", f"当前五点分析已生成：{fit_dir}", "read-only")
+            return GuideAction("postprocess", "五点 E-U 拟合与报告", "已收集当前结果；下一步生成拟合、图像及报告。", "file-changing", "postprocess")
         return GuideAction(
             name="collect",
             title_zh="收集计算结果",

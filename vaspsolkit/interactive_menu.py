@@ -65,6 +65,8 @@ def action_availability(action: MenuAction, snapshot) -> Tuple[bool, str]:
     if action.code in {"00", "01", "03", "10", "90"}:
         return True, ""
     if action.code == "02":
+        if recommend_action(snapshot).name == "results-ready":
+            return True, ""
         return (bool(action.command), "请先按 10 查看并补齐基础输入")
     if action.code == "11":
         return (not snapshot.has_config, "Case 已经初始化")
@@ -72,6 +74,8 @@ def action_availability(action: MenuAction, snapshot) -> Tuple[bool, str]:
         return (snapshot.has_config, "请先初始化 Case")
     if action.code == "13":
         return (snapshot.has_config, "请先初始化 Case")
+    if action.code == "14":
+        return ((case.workdir / "POSCAR").is_file(), "请先提供 POSCAR 结构")
     if action.code == "20":
         return (
             snapshot.has_config and case.neutral_status == "NOT_PREPARED",
@@ -194,7 +198,7 @@ def _fixed_cli_argv(
             "--summary",
             str(results / config.workflow.summary_file),
             "--output",
-            str(results),
+            str(results / "eu"),
         ]
     argv = [action.command, "--workdir", str(case.workdir)]
     if snapshot.has_config:
@@ -229,7 +233,8 @@ def _print_input_status(snapshot, output: OutputFn) -> None:
     if missing:
         output("基础输入缺失: " + ", ".join(missing))
     else:
-        output("基础输入检查通过: POSCAR, INCAR, KPOINTS, POTCAR")
+        from .sampling import describe_sampling
+        output("基础输入检查通过: POSCAR, INCAR, POTCAR; " + describe_sampling(snapshot.case.workdir))
 
 
 def _print_help(output: OutputFn) -> None:
@@ -274,6 +279,10 @@ def run_menu_action(
     if not available:
         output(f"任务 {action.code} 当前不可执行：{reason}")
         return 1
+    if action.code == "02" and recommend_action(snapshot).name == "results-ready":
+        output(recommend_action(snapshot).reason_zh)
+        output("analysis.json, eu_curve.csv, eu_curve.png, report.md；重新分析可选择 62。")
+        return 0
     if action.code == "01":
         result = synchronize_fn(snapshot.case.workdir, config_path=snapshot.case.config_path)
         if result is not None and not result.ok:
@@ -326,7 +335,7 @@ def run_menu_action(
             output("提交已取消；未修改资源配置。")
             return 1
 
-    if guide_action is not None:
+    if guide_action is not None and action.command != "postprocess":
         argv = action_cli_argv(
             snapshot.case.workdir,
             guide_action,
@@ -350,7 +359,7 @@ def run_menu_action(
         )
 
     output(f"将执行: vaspsolkit {' '.join(argv)}")
-    if action.command == "configure-reference":
+    if action.command in {"configure-reference", "inputs"}:
         if cli_main is None:
             from .cli import main as cli_main
         return int(cli_main(argv, input_fn=input_fn, output=output))
@@ -416,9 +425,15 @@ def run_menu(
                 output=output,
                 synchronize_fn=synchronize_fn,
             )
+        except (KeyboardInterrupt, EOFError):
+            output("\n操作已中断，已退出菜单。若正在提交任务，请先检查状态和提交回执，不要直接重提。")
+            return 1
         except (OSError, RuntimeError, ValueError, KeyError) as exc:
             output(f"任务执行失败：{exc}")
-            output("恢复建议：先执行任务 03 查看完整状态与诊断。")
+            if resolve_action(selected.code, snapshot).command == "inputs":
+                output("恢复建议：修正上述路径或参数后，重新选择 14（或 02）补齐输入；任务状态问题请用 03 查看诊断。")
+            else:
+                output("恢复建议：先执行任务 03 查看完整状态与诊断。")
 
 
 def _case_label(workdir: Path) -> str:

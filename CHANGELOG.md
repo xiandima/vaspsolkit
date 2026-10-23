@@ -2,6 +2,35 @@
 
 ## 0.4.0 - Unreleased
 
+- Add a Chinese Sphinx/MyST user manual with chapter navigation, search, code copying, mobile layout and a clearly labelled synthetic five-point E-U example. Test and deploy the manual from the same main commit as the program; publish source revision metadata.
+- Verify installed-wheel imports outside the source tree and exercise the documented offline setup and five-point postprocessing journey from the installed CLI.
+- Reject path-like POSCAR element labels before input staging, preserve relative-PATH VASPKIT launchers, and recognize fractional-hydrogen POTCAR variants.
+- Route batch CLI submissions through durable receipts, enforce selected-job concurrency limits, and require recollection after source/run changes before recommending existing results.
+- Rewrite README as a first-use guide; separate input/command/recovery instructions, installation help and contributor details into linked guides.
+- Offer optional reusable pseudopotential settings in the input-completion menu, default to not saving, and explain how to retry incomplete inputs.
+- Fail promptly for missing initialization/reference parameters in non-TTY sessions, with open-stdin regressions and no write or scheduler side effects.
+- Check documented command examples, menu names and links alongside first-use and batch-user journeys.
+- Let automatic SLURM allocation select a partition from the current server, retain valid saved defaults, and keep single-node tasks-per-node consistent with the selected MPI task count.
+- Add qvasp-inspired `inputs` and `next` commands alongside the existing numbered menu; menu 14 completes missing inputs with one final confirmation.
+- Support explicit KSPACING/KGAMMA without KPOINTS throughout initialization, neutral/charged preparation, fingerprints, snapshots, and submission preflight. Existing KPOINTS keeps VASP precedence.
+- Generate missing POTCAR from a licensed, explicitly mapped library; support isolated VASPKIT 1.5.x tasks 103/102 with bounded execution and validated outputs.
+- Save reusable input settings only on request, never reuse a per-structure explicit mesh, and record input-generation provenance without potential contents.
+- Advance recommendations from collected data to five-point fitting and current-result inspection. Menu fits use `results/eu/` to preserve detailed audit tables.
+- Add source-summary SHA256 to fitted analysis and tests for native sampling, missing-file completion, settings reuse, helpers, and command/menu parity.
+- Add non-interactive custom-scheduler initialization with quoted command arguments, optional query/cancel/inspect commands, and explicit Job ID patterns.
+- Validate custom command placeholders and Job ID regular expressions before any scheduler command is executed.
+- Parse Slurm Job IDs in site-wrapper output and preserve UNKNOWN status when status commands are missing or time out.
+- Run interactive VASPKIT input assistance in an isolated directory; validate and import only missing inputs without overwriting existing templates.
+- Roll back handled initialization/input-publication failures, preserve detected intervening edits, and report incomplete rollback paths for manual review.
+- Accept regular Gamma/Monkhorst-Pack KPOINTS with the optional shift row omitted.
+- Include test support files, citation/contribution documents, and the CI specification in source distributions.
+- Add a tested compatibility matrix, offline/new-user command walkthroughs, source-shadowing diagnostics, and wheel-install smoke tests.
+- Preserve INCAR sibling assignments, comments and continued/quoted values when editing tags; share parsing across preparation, previews and NELECT checks.
+- Treat equivalent numeric INCAR settings consistently and detect semicolon-separated duplicate tags.
+- Make `init --yes` and `repair --yes` reject missing arguments instead of waiting for stdin, and refuse initialization over existing Case configuration/state.
+- Recheck initialization targets and template freshness under the workflow state lock so stale confirmations cannot erase another session's Job ID.
+- Reject zero/negative menu choices, handle EOF/interruption within menu actions, and report declined neutral submissions as cancellation.
+- Add concise console error reporting with `--debug`, black-box CLI regression tests and isolated test submission receipts.
 - Separate the quadratic energy vertex from the charge-zero PZC estimate.
 - Add fit-domain and scientific-provenance metadata to postprocessing output.
 - Reject reaction inputs with unknown or incompatible provenance by default.

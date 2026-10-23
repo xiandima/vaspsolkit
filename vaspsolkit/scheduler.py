@@ -4,6 +4,7 @@ import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from string import Formatter
 from typing import Callable, List, Optional, Sequence
 
 from .config import SchedulerConfig
@@ -97,30 +98,46 @@ class SlurmScheduler:
         result = self.runner(command, Path(workdir))
         if result.returncode != 0:
             raise RuntimeError(f"sbatch failed in {workdir}: {result.stderr.strip()}")
-        job_id = result.stdout.strip().split(";", 1)[0]
-        if not job_id:
+        if not result.stdout.strip():
             raise RuntimeError(f"sbatch in {workdir} returned an empty job id")
-        return job_id
+        job_ids = []
+        for line in result.stdout.splitlines():
+            match = re.fullmatch(
+                r"(?:Submitted batch job )?([0-9]+)(?:;[^;\s]+)?", line.strip()
+            )
+            if match is not None:
+                job_ids.append(match.group(1))
+        if len(job_ids) != 1:
+            raise RuntimeError(
+                f"sbatch in {workdir} did not return an unambiguous job id: {result.stdout!r}"
+            )
+        return job_ids[0]
 
     def status(self, job_id: str) -> JobState:
         if job_id.startswith("DRY-RUN:"):
             return JobState(job_id=job_id, exists=False, state="DRY-RUN")
-        result = (
-            _default_runner(["squeue", "-h", "-j", job_id, "-o", "%T"], None, timeout=30)
-            if self._uses_default_runner
-            else self.runner(["squeue", "-h", "-j", job_id, "-o", "%T"], None)
-        )
+        try:
+            result = (
+                _default_runner(["squeue", "-h", "-j", job_id, "-o", "%T"], None, timeout=30)
+                if self._uses_default_runner
+                else self.runner(["squeue", "-h", "-j", job_id, "-o", "%T"], None)
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return JobState(job_id, True, "UNKNOWN", str(exc))
         if result.returncode != 0:
             return JobState(job_id=job_id, exists=True, state="UNKNOWN", raw=result.stderr)
         state = result.stdout.strip().splitlines()
         if not state:
             command = ["sacct", "-X", "-n", "-P", "-j", job_id,
                        "--format=JobIDRaw,State,ExitCode"]
-            history = (
-                _default_runner(command, None, timeout=30)
-                if self._uses_default_runner
-                else self.runner(command, None)
-            )
+            try:
+                history = (
+                    _default_runner(command, None, timeout=30)
+                    if self._uses_default_runner
+                    else self.runner(command, None)
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                return JobState(job_id, True, "UNKNOWN", str(exc))
             if history.returncode != 0:
                 return JobState(job_id, True, "UNKNOWN", history.stderr or history.stdout)
             for line in history.stdout.splitlines():
@@ -198,7 +215,14 @@ def parse_slurm_nodes(stdout: str, partition: str) -> List[SlurmNodeInfo]:
 class CustomScheduler:
     def __init__(self, config: SchedulerConfig, runner: Optional[Runner] = None):
         config.validate()
+        for name in ("submit_command", "status_command", "inspect_command", "cancel_command"):
+            _validate_command_template(getattr(config, name), name)
+        try:
+            self._job_id_regex = re.compile(config.job_id_pattern)
+        except re.error as exc:
+            raise ValueError(f"scheduler.job_id_pattern is invalid: {exc}") from exc
         self.config = config
+        self._uses_default_runner = runner is None
         self.runner = runner or _default_runner
 
     def submit(self, workdir: Path, script: str, dry_run: bool = False, **_: object) -> str:
@@ -208,7 +232,7 @@ class CustomScheduler:
         result = self.runner(command, Path(workdir))
         if result.returncode != 0:
             raise RuntimeError(f"custom submit failed in {workdir}: {result.stderr.strip()}")
-        match = re.search(self.config.job_id_pattern, result.stdout)
+        match = self._job_id_regex.search(result.stdout)
         if match is None:
             raise RuntimeError("custom submit output did not contain a job id")
         return match.groupdict().get("job_id") or match.group(0)
@@ -217,7 +241,14 @@ class CustomScheduler:
         command = _format_command(self.config.status_command, script=self.config.script, job_id=job_id)
         if not command:
             return JobState(job_id=job_id, exists=True, state="UNKNOWN", raw="status command not configured")
-        result = self.runner(command, None)
+        try:
+            result = (
+                _default_runner(command, None, timeout=30)
+                if self._uses_default_runner
+                else self.runner(command, None)
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return JobState(job_id, True, "UNKNOWN", str(exc))
         if result.returncode != 0:
             return JobState(job_id=job_id, exists=True, state="UNKNOWN", raw=result.stderr)
         state = result.stdout.strip().splitlines()
@@ -253,3 +284,21 @@ def scheduler_from_config(config: SchedulerConfig):
 
 def _format_command(command: Sequence[str], script: str, job_id: str) -> List[str]:
     return [part.format(script=script, job_id=job_id) for part in command]
+
+
+def _validate_command_template(command: Sequence[str], name: str) -> None:
+    formatter = Formatter()
+    for index, part in enumerate(command):
+        try:
+            for _literal, field, spec, conversion in formatter.parse(part):
+                if field is None:
+                    continue
+                if field not in {"script", "job_id"}:
+                    raise ValueError(f"unknown placeholder {{{field}}}")
+                if spec or conversion:
+                    raise ValueError("placeholder formatting and conversions are not supported")
+        except ValueError as exc:
+            raise ValueError(
+                f"scheduler.{name}[{index}] is invalid: {exc}; "
+                "use {script}, {job_id}, or doubled braces for literal text"
+            ) from exc

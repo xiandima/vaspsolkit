@@ -14,6 +14,7 @@ def test_menu_codes_are_fixed_unique_and_normalized() -> None:
         "11",
         "12",
         "13",
+        "14",
         "20",
         "21",
         "22",

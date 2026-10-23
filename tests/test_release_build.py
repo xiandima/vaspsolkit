@@ -57,6 +57,14 @@ def test_release_manifest_excludes_archived_ui() -> None:
     assert "recursive-include examples *.json *.md" in manifest
 
 
+def test_source_release_includes_test_support_and_project_documents() -> None:
+    manifest = Path("MANIFEST.in").read_text(encoding="utf-8")
+    assert "recursive-include tests *.py" in manifest
+    assert "include CITATION.cff" in manifest
+    assert "include CONTRIBUTING.md" in manifest
+    assert "include .github/workflows/tests.yml" in manifest
+
+
 def test_formal_sources_include_menu_operations_and_exclude_ui_runtime() -> None:
     root = Path(".")
     project = (root / "pyproject.toml").read_text(encoding="utf-8")

@@ -12,14 +12,14 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 from .config import (
-    EXPECT_ABSENT,
     KitConfig,
     SchedulerConfig,
     WorkflowConfig,
+    config_write_lock,
     serialize_kit_config,
-    write_config_bytes,
 )
 from .inputs import plan_neutral_vaspsol_update, suggest_encut, validate_potcar_order
+from .sampling import kpoints_required
 from .state import workflow_state_lock
 
 
@@ -123,18 +123,31 @@ class CaseDirectoryFingerprint:
 
 
 class CaseInitializationApplyError(RuntimeError):
-    """A structured staging or replacement failure.
+    """A handled write failure, possibly with incomplete rollback.
 
-    Each individual replacement is atomic. A failure after one replacement may
-    leave that earlier file updated; this is deliberately not a multi-file
-    transaction.
+    Recovery checks published file identity and content under cooperative locks.
+    It does not provide crash atomicity or isolation from uncooperative writers.
     """
 
-    def __init__(self, phase: str, path: Path, cause: BaseException) -> None:
+    def __init__(self, phase: str, path: Path, cause: BaseException, rollback_errors=()) -> None:
         self.phase = phase
         self.path = path
         self.cause = cause
-        super().__init__(f"initialization {phase} failed for {path}: {cause}")
+        self.rollback_errors = tuple(rollback_errors)
+        message = f"initialization {phase} failed for {path}: {cause}"
+        if self.rollback_errors:
+            message += "; rollback incomplete: " + "; ".join(
+                f"{target}: {error}" for target, error in self.rollback_errors
+            )
+        super().__init__(message)
+
+
+@dataclass(frozen=True)
+class _FileSnapshot:
+    data: Optional[bytes] = None
+    mode: Optional[int] = None
+    identity: Optional[Tuple[int, int, int]] = None
+    symlink_target: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -190,8 +203,9 @@ class CaseInitializationPlan:
         ):
             raise TypeError("source_fingerprints must contain CaseSourceFingerprint values")
         labels = tuple(fingerprint.label for fingerprint in self.source_fingerprints)
-        if labels != ("POSCAR", "INCAR", "KPOINTS", "POTCAR", "script"):
-            raise ValueError("source_fingerprints must cover all five initialization sources")
+        native_sampling = labels == ("POSCAR", "INCAR", "POTCAR", "script")
+        if not native_sampling and labels != ("POSCAR", "INCAR", "KPOINTS", "POTCAR", "script"):
+            raise ValueError("source_fingerprints must cover all required initialization sources")
         for fingerprint in self.source_fingerprints:
             try:
                 fingerprint.source_path.relative_to(self.workdir)
@@ -206,8 +220,13 @@ class CaseInitializationPlan:
         ):
             raise TypeError("target_fingerprints must contain CaseTargetFingerprint values")
         target_labels = tuple(fingerprint.label for fingerprint in self.target_fingerprints)
-        if target_labels != ("INCAR", CONFIG_FILENAME, STATE_FILENAME):
+        expected_targets = ("INCAR", CONFIG_FILENAME, STATE_FILENAME) + (("KPOINTS",) if native_sampling else ())
+        if target_labels != expected_targets:
             raise ValueError("target_fingerprints must cover all initialization targets")
+        if native_sampling and self.target_fingerprints[-1] != CaseTargetFingerprint(
+            "KPOINTS", self.workdir / "KPOINTS", "absent", None, None
+        ):
+            raise ValueError("native sampling must fingerprint the absence of KPOINTS")
         for fingerprint in self.target_fingerprints:
             try:
                 fingerprint.path.relative_to(self.workdir)
@@ -234,18 +253,17 @@ def plan_case_initialization(
     scheduler.validate()
     case = _resolved_case(workdir)
     script_path = _resolve_script(case, scheduler.script)
+    require_kpoints = kpoints_required(case)
     required = {
         name: _required_file(case, name)
         for name in ("POSCAR", "INCAR", "KPOINTS", "POTCAR")
+        if name != "KPOINTS" or require_kpoints
     }
     _require_nonempty(script_path, scheduler.script)
     source_fingerprints = tuple(
         _fingerprint_source(case, label, source_path, resolved_path)
         for label, source_path, resolved_path in (
-            ("POSCAR", case / "POSCAR", required["POSCAR"]),
-            ("INCAR", case / "INCAR", required["INCAR"]),
-            ("KPOINTS", case / "KPOINTS", required["KPOINTS"]),
-            ("POTCAR", case / "POTCAR", required["POTCAR"]),
+            *((name, case / name, path) for name, path in required.items()),
             ("script", case / Path(scheduler.script), script_path),
         )
     )
@@ -279,7 +297,7 @@ def plan_case_initialization(
     config_before_bytes = config_path.read_bytes() if config_path.is_file() else None
     target_fingerprints = tuple(
         _fingerprint_target(case, label, _nominal_target_path(case, label))
-        for label in ("INCAR", CONFIG_FILENAME, STATE_FILENAME)
+        for label in ("INCAR", CONFIG_FILENAME, STATE_FILENAME) + (("KPOINTS",) if not require_kpoints else ())
     )
 
     changes = []
@@ -343,38 +361,119 @@ def _apply_case_initialization_locked(
 
     changes = _ordered_changes(plan.file_changes)
     staged = []
+    backups = []
+    originals = {}
     try:
         for change in changes:
+            original = _snapshot_file(change.path)
+            originals[change.path] = original
+            if original.mode is not None:
+                backups.append((_stage_original(change.path, original), change))
             staged.append((_stage_file_change(change), change))
     except BaseException as exc:
         _cleanup_staged(staged)
+        _cleanup_staged(backups)
         path = change.path if "change" in locals() else case
         raise CaseInitializationApplyError("stage", path, exc) from exc
 
+    attempted = []
+    rollback_errors = []
+    failed_path = case / CONFIG_FILENAME
     try:
-        config_temp, config_change = next(
-            item for item in staged if item[1].path.name == CONFIG_FILENAME
-        )
-        failed_path = config_change.path
-        expected_config = (
-            EXPECT_ABSENT
-            if plan.config_before_bytes is None
-            else plan.config_before_bytes
-        )
-        write_config_bytes(
-            config_change.path,
-            config_temp.read_bytes(),
-            expected_current=expected_config,
-        )
-        config_temp.unlink()
-        staged = [item for item in staged if item[1] is not config_change]
-        for temp_path, change in staged:
-            failed_path = change.path
-            os.replace(temp_path, change.path)
+        with config_write_lock(case / CONFIG_FILENAME):
+            try:
+                for fingerprint in plan.target_fingerprints:
+                    failed_path = fingerprint.path
+                    _verify_target_fingerprint(case, fingerprint)
+                for change in changes:
+                    failed_path = change.path
+                    if _snapshot_file(change.path) != originals[change.path]:
+                        raise RuntimeError(f"initialization target changed during staging: {change.path}")
+                # Preserve the existing config-first publication order.
+                for temp_path, change in sorted(staged, key=lambda item: item[1].path.name != CONFIG_FILENAME):
+                    failed_path = change.path
+                    installed = _snapshot_file(temp_path)
+                    attempted.append((change, installed))
+                    if originals[change.path].mode is None:
+                        os.link(temp_path, change.path)
+                        temp_path.unlink()
+                    else:
+                        os.replace(temp_path, change.path)
+                    if _snapshot_file(change.path) != installed:
+                        raise RuntimeError(f"published initialization target changed: {change.path}")
+                failed_path = case
+                directory_fd = os.open(case, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+            except BaseException:
+                rollback_errors = _rollback_changes(attempted, originals, backups)
+                raise
     except BaseException as exc:
+        raise CaseInitializationApplyError("replace", failed_path, exc, rollback_errors) from exc
+    finally:
         _cleanup_staged(staged)
-        raise CaseInitializationApplyError("replace", failed_path, exc) from exc
+        retained = {path for path, _error in rollback_errors}
+        _cleanup_staged([item for item in backups if item[1].path not in retained])
     return tuple(change.path for change in changes)
+
+
+def _snapshot_file(path: Path) -> _FileSnapshot:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return _FileSnapshot()
+    if stat.S_ISLNK(metadata.st_mode):
+        data, link = None, os.readlink(path)
+    elif stat.S_ISREG(metadata.st_mode):
+        data, link = path.read_bytes(), None
+    else:
+        raise RuntimeError(f"initialization target is not a regular file or symlink: {path}")
+    after = path.lstat()
+    fields = ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns", "st_ctime_ns")
+    if any(getattr(metadata, field) != getattr(after, field) for field in fields):
+        raise RuntimeError(f"initialization target changed while reading: {path}")
+    return _FileSnapshot(data, metadata.st_mode, (metadata.st_dev, metadata.st_ino, metadata.st_mtime_ns), link)
+
+
+def _stage_original(path: Path, original: _FileSnapshot) -> Path:
+    temporary = _stage_bytes(path, original.data or b"", stat.S_IMODE(original.mode))
+    if original.symlink_target is not None:
+        try:
+            temporary.unlink()
+            temporary.symlink_to(original.symlink_target)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
+    return temporary
+
+
+def _rollback_changes(attempted, originals, backups):
+    recovery = {change.path: temporary for temporary, change in backups}
+    errors = []
+    for change, installed in reversed(attempted):
+        path = change.path
+        backup = recovery.get(path)
+        try:
+            current = _snapshot_file(path)
+            if current == originals[path]:
+                continue
+            if current != installed:
+                raise RuntimeError("target changed externally; left untouched")
+            if backup is None:
+                path.unlink()
+            else:
+                restored = _snapshot_file(backup)
+                os.replace(backup, path)
+                if _snapshot_file(path) != restored:
+                    raise RuntimeError("restored target does not match the original backup")
+        except BaseException as exc:
+            detail = str(exc)
+            if backup is not None and (backup.is_symlink() or backup.exists()):
+                detail += f"; original backup retained at {backup}"
+            errors.append((path, RuntimeError(detail)))
+    return errors
 
 
 def _normalized_preview_text(data: bytes) -> str:
@@ -496,14 +595,20 @@ def _ordered_changes(
 
 
 def _stage_file_change(change: PlannedFileChange) -> Path:
+    mode = stat.S_IMODE(change.path.stat().st_mode) if change.path.exists() else 0o600
+    return _stage_bytes(change.path, change.after.encode("utf-8"), mode)
+
+
+def _stage_bytes(path: Path, data: bytes, mode: int) -> Path:
     descriptor, name = tempfile.mkstemp(
-        prefix=f".{change.path.name}.", suffix=".tmp", dir=change.path.parent
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
     )
     temp_path = Path(name)
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(change.after)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(data)
             handle.flush()
+            os.fchmod(handle.fileno(), mode)
             os.fsync(handle.fileno())
     except BaseException:
         temp_path.unlink(missing_ok=True)

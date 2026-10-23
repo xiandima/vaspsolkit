@@ -29,6 +29,7 @@ MENU_ACTIONS: Tuple[MenuAction, ...] = (
         "inputs",
     ),
     MenuAction("13", "设置电化学参考参数", "configure-reference", "file-changing", "inputs"),
+    MenuAction("14", "补齐输入：模板、赝势与采样", "inputs", "file-changing", "inputs"),
     MenuAction("20", "准备中性结构优化", "prepare-neutral", "file-changing", "neutral"),
     MenuAction("21", "提交中性任务", "submit-neutral", "external-submit", "neutral"),
     MenuAction("22", "检查中性任务与收敛", "check-neutral", "read-only", "neutral"),

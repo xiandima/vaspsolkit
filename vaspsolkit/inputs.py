@@ -5,10 +5,11 @@ import re
 import shutil
 import subprocess
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
-from .incar import replace_or_append
+from .incar import incar_assignments, parse_incar, replace_or_append
 
 
 COMMON_DEFAULTS = {
@@ -103,6 +104,12 @@ CRITICAL_INCAR_TAGS = (
 )
 
 
+def _element_symbol(label: str) -> Optional[str]:
+    # Retain fractional, semicore and GW suffixes without accepting path syntax.
+    match = re.fullmatch(r"([A-Z][a-z]?)(?:[0-9_.-][A-Za-z0-9_.-]*)?", label)
+    return match.group(1) if match is not None else None
+
+
 def poscar_elements(path: Path) -> List[str]:
     lines = Path(path).read_text(encoding="utf-8", errors="ignore").splitlines()
     if len(lines) < 7:
@@ -110,6 +117,9 @@ def poscar_elements(path: Path) -> List[str]:
     tokens = lines[5].split()
     if not tokens or all(_is_number(token) for token in tokens):
         raise ValueError("POSCAR does not contain a VASP5 element line")
+    for label in tokens:
+        if _element_symbol(label) is None:
+            raise ValueError(f"invalid POSCAR element label {label!r}: {path}")
     return tokens
 
 
@@ -120,20 +130,22 @@ def potcar_elements(path: Path) -> List[str]:
         if "TITEL" not in line.upper() or "=" not in line:
             continue
         tokens = line.split("=", 1)[1].split()
-        candidate = next((token for token in tokens if re.match(r"^[A-Z][a-z]?(?:_|$)", token)), "")
+        symbols = (_element_symbol(token) for token in tokens)
+        candidate = next((symbol for symbol in symbols if symbol is not None), None)
         if candidate:
-            elements.append(candidate.split("_", 1)[0])
+            elements.append(candidate)
     if not elements:
         raise ValueError(f"POTCAR contains no TITEL element records: {path}")
     return elements
 
 
 def validate_potcar_order(poscar: Path, potcar: Path) -> List[str]:
-    expected = poscar_elements(poscar)
+    labels = poscar_elements(poscar)
+    expected = [_element_symbol(label) for label in labels]
     actual = potcar_elements(potcar)
     if expected != actual:
         raise ValueError(f"POTCAR element order {actual} does not match POSCAR element order {expected}")
-    return expected
+    return labels
 
 
 def suggest_encut(potcar: Path, scale: float = 1.3) -> int:
@@ -153,7 +165,7 @@ def apply_incar_profile(
     if profile not in PROFILE_TAGS:
         raise ValueError(f"unknown INCAR profile: {profile}")
     result = text
-    existing = _active_incar_tags(result)
+    existing = parse_incar(result)
     common = dict(COMMON_DEFAULTS)
     if suggested_encut is not None:
         common["ENCUT"] = str(suggested_encut)
@@ -170,14 +182,8 @@ def apply_incar_profile(
 def plan_neutral_vaspsol_update(text: str) -> IncarUpdatePlan:
     """Plan safe neutral VASPsol additions without replacing user settings."""
     assignments: Dict[str, List[str]] = {}
-    for line in text.splitlines():
-        clean = line.split("!", 1)[0].split("#", 1)[0]
-        if "=" not in clean:
-            continue
-        key, value = clean.split("=", 1)
-        normalized_key = key.strip().upper()
-        if normalized_key:
-            assignments.setdefault(normalized_key, []).append(value.strip())
+    for key, value in incar_assignments(text):
+        assignments.setdefault(key, []).append(value)
 
     duplicates = tuple(sorted(key for key, values in assignments.items() if len(values) > 1))
     conflicts = []
@@ -219,23 +225,18 @@ def run_vaspkit(task_input: Sequence[str], workdir: Path) -> subprocess.Complete
     )
 
 
-def _active_incar_tags(text: str) -> Dict[str, str]:
-    tags: Dict[str, str] = {}
-    for line in text.splitlines():
-        clean = line.split("!", 1)[0].split("#", 1)[0]
-        if "=" not in clean:
-            continue
-        key, value = clean.split("=", 1)
-        tags[key.strip().upper()] = value.strip()
-    return tags
-
-
 def _normalized_incar_value(value: str) -> str:
     normalized = value.strip().upper()
     if normalized in {"TRUE", ".TRUE.", "T"}:
         return ".TRUE."
     if normalized in {"FALSE", ".FALSE.", "F"}:
         return ".FALSE."
+    try:
+        number = Decimal(normalized.replace("D", "E"))
+        if number.is_finite():
+            return str(number.normalize())
+    except InvalidOperation:
+        pass
     return normalized
 
 

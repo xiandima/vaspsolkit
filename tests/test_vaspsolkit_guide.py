@@ -37,7 +37,7 @@ class GuideModelTests(unittest.TestCase):
         self.assertIn("初始化", action.title_zh)
         self.assertIn("vaspsolkit.json", action.reason_zh)
 
-    def test_missing_base_inputs_blocks_mutating_action(self):
+    def test_missing_base_inputs_offers_confirmed_completion(self):
         from vaspsolkit.guide_model import build_snapshot, recommend_action
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -48,8 +48,8 @@ class GuideModelTests(unittest.TestCase):
             action = recommend_action(snapshot)
 
         self.assertEqual(action.name, "fix-inputs")
-        self.assertEqual(action.effect, "read-only")
-        self.assertIsNone(action.cli_command)
+        self.assertEqual(action.effect, "file-changing")
+        self.assertEqual(action.cli_command, "inputs")
 
     def test_configured_case_without_neutral_state_recommends_prepare_neutral(self):
         from vaspsolkit.guide_model import build_snapshot, recommend_action
@@ -170,4 +170,3 @@ class BeginnerCliWiringTests(unittest.TestCase):
         args, kwargs = open_menu.call_args
         self.assertEqual(args[0], root)
         self.assertIsNone(kwargs["config_path"])
-

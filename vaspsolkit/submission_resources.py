@@ -53,6 +53,19 @@ def _render_current(config: KitConfig, output: OutputFn) -> None:
     output(f"  提交脚本：{scheduler.script}")
 
 
+def _select_partition(scheduler, input_fn: InputFn, output: OutputFn, default: str = "") -> str:
+    partitions = scheduler.inspect_partitions()
+    if not partitions:
+        raise ValueError("未查询到 SLURM 分区，请检查本机队列访问权限")
+    output("SLURM 分区：" + ", ".join(partitions))
+    default = default if default in partitions else ""
+    prompt = f"分区名 [{default}] >> " if default else "分区名 >> "
+    partition = input_fn(prompt).strip() or default
+    if partition not in partitions:
+        raise ValueError(f"未知 SLURM 分区：{partition}")
+    return partition
+
+
 def _specified_resources(
     config: KitConfig,
     *,
@@ -61,11 +74,7 @@ def _specified_resources(
     scheduler_factory,
 ) -> ResourceRequest:
     scheduler = scheduler_factory(config.scheduler)
-    partitions = scheduler.inspect_partitions()
-    output("SLURM 分区：" + ", ".join(partitions))
-    partition = input_fn("分区名 >> ").strip()
-    if partition not in partitions:
-        raise ValueError(f"未知 SLURM 分区：{partition}")
+    partition = _select_partition(scheduler, input_fn, output)
     nodes = scheduler.inspect_nodes(partition)
     output(f"{partition} 节点：")
     for item in nodes:
@@ -110,7 +119,8 @@ def prompt_submission_resources(
         _render_current(config, output)
         output("")
         output("1. 使用以上配置")
-        output("2. 自动分配节点，重新设置任务数")
+        output("2. 选择分区并自动分配节点，重新设置任务数" if config.scheduler.kind == "slurm"
+               else "2. 自动分配节点，重新设置任务数")
         if config.scheduler.kind == "slurm":
             output("3. 先选分区，再指定节点")
         output("0. 取消提交")
@@ -121,6 +131,11 @@ def prompt_submission_resources(
             return resources_from_config(config)
         try:
             if choice == "2":
+                partition = config.scheduler.partition
+                if config.scheduler.kind == "slurm":
+                    partition = _select_partition(
+                        scheduler_factory(config.scheduler), input_fn, output, default=partition,
+                    )
                 tasks = _positive_int("任务数 >> ", input_fn)
                 persist = (
                     input_fn("是否保存为当前 Case 默认配置？[y/N] ")
@@ -130,9 +145,10 @@ def prompt_submission_resources(
                 )
                 return ResourceRequest.create(
                     allocation="auto",
-                    partition=config.scheduler.partition, nodes=(),
+                    partition=partition, nodes=(),
                     node_count=config.scheduler.node_count,
-                    tasks=tasks, tasks_per_node=config.scheduler.tasks_per_node,
+                    tasks=tasks,
+                    tasks_per_node=tasks if config.scheduler.node_count == 1 else config.scheduler.tasks_per_node,
                     walltime=config.scheduler.walltime,
                     script=config.scheduler.script,
                     persist=persist,

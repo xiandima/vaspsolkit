@@ -36,17 +36,21 @@ from ..orchestrator import (
     apply_recorded_job_statuses as apply_case_recorded_job_statuses,
     capture_recorded_jobs as capture_case_recorded_jobs,
     collect_recorded_job_statuses as collect_case_recorded_job_statuses,
+    collection_source_fingerprint,
+    record_collection,
     prepare_neutral_job,
     prepare_charge_jobs,
     check_prepared_jobs,
     reset_queued_jobs,
+    submission_batch,
     submit_selected_jobs,
     submit_neutral_job,
 )
 from ..scheduler import SlurmScheduler, scheduler_from_config
 from ..postprocess import postprocess_versioned
 from ..reference_settings import inspect_reference_freshness
-from ..state import JobRecord, WorkflowState
+from ..sampling import kpoints_required
+from ..state import JobRecord, WorkflowState, workflow_state_lock
 from ..workflow import collect_results, result_file_path, results_root_path
 from .actions import (
     ACTION_EFFECTS,
@@ -176,6 +180,7 @@ class _CollectPayload:
     after: str
     case_identity: Tuple[int, int]
     fingerprints: Tuple[_EntryFingerprint, ...]
+    source_fingerprint: str
 
 
 @dataclass(frozen=True)
@@ -631,6 +636,13 @@ class WorkbenchController:
                 blocked_parts.append(
                     "所选任务不是 PREPARED: " + ", ".join(not_prepared)
                 )
+            deferred = ()
+            if not blocked_parts:
+                batch = tuple(submission_batch(config, state, names))
+                deferred = names[len(batch):]
+                names = batch
+                if not names:
+                    blocked_parts.append("max_inflight capacity is exhausted; refresh recorded jobs before submitting")
             submit_config = _config_with_resources(config, resources)
             config_after = (
                 serialize_kit_config(submit_config).decode("utf-8")
@@ -688,6 +700,7 @@ class WorkbenchController:
                 file_diffs=file_diffs,
                 scheduler_request=resources,
                 commands_summary=(f"sbatch × {len(names)}",),
+                warnings=(("max_inflight: deferred PREPARED jobs: " + ", ".join(deferred),) if deferred else ()),
                 blocked_reason=" ".join(blocked_parts),
             )
         elif action in {"prepare-charge", "check-prepared"}:
@@ -855,6 +868,12 @@ class WorkbenchController:
         return plan
 
     def execute(self, plan: ActionPlan, confirmed: bool = False) -> ActionResult:
+        if isinstance(plan, ActionPlan) and confirmed and plan.action_id in {"submit-neutral", "submit-selected", "collect"}:
+            with workflow_state_lock(self.workdir / STATE_FILENAME):
+                return self._execute(plan, confirmed)
+        return self._execute(plan, confirmed)
+
+    def _execute(self, plan: ActionPlan, confirmed: bool = False) -> ActionResult:
         if not isinstance(plan, ActionPlan):
             raise TypeError("plan must be an ActionPlan")
         if plan.target_case != self.workdir:
@@ -1436,6 +1455,7 @@ class WorkbenchController:
                     raise RuntimeError(f"{expected.relative} 已变化，请重新预览。")
             payload.output_path.parent.mkdir(parents=True, exist_ok=True)
             _atomic_write_text(payload.output_path, payload.after)
+            record_collection(self.workdir, payload.config, payload.source_fingerprint)
             return ActionResult(
                 plan.action_id,
                 "completed",
@@ -1533,9 +1553,11 @@ class WorkbenchController:
         _require_case_file(self.workdir, config_relative)
         config = load_kit_config(config_path)
         self._validate_script_path(_resources_from_config(config))
+        require_kpoints = kpoints_required(self.workdir)
         required = {
             name: _require_case_file(self.workdir, name)
             for name in ("POSCAR", "INCAR", "POTCAR", "KPOINTS", config.scheduler.script)
+            if name != "KPOINTS" or require_kpoints
         }
         state_path = self.workdir / STATE_FILENAME
         state = WorkflowState.load(state_path) if state_path.exists() else WorkflowState()
@@ -1721,6 +1743,7 @@ class WorkbenchController:
         config = load_kit_config(self.config_path)
         state_path = self.workdir / STATE_FILENAME
         state = WorkflowState.load(state_path)
+        source_fingerprint = collection_source_fingerprint(self.workdir, config, state)
         blocked = []
         if not state.jobs:
             blocked.append("没有可收集的带电点任务")
@@ -1770,6 +1793,7 @@ class WorkbenchController:
             after=after,
             case_identity=_case_identity(self.workdir),
             fingerprints=fingerprints,
+            source_fingerprint=source_fingerprint,
         )
         plan = ActionPlan(
             action_id="collect",

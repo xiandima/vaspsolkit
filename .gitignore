@@ -8,6 +8,7 @@ build/
 dist/
 *.egg-info/
 .venv/
+.venv-docs/
 venv/
 .worktrees/
 
@@ -28,6 +29,7 @@ vasp.slurm
 submit.sh
 vaspsolkit.json
 vaspsolkit.state.json
+vaspsolkit.inputs-*.json
 .vaspsolkit/
 charge_sweep/
 results/

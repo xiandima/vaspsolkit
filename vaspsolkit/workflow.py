@@ -11,7 +11,7 @@ from typing import Dict, Iterable, List, Optional
 
 from .analysis import analyze_rows, evaluate_quadratic, write_analysis
 from .config import WorkflowConfig
-from .incar import replace_or_append
+from .incar import parse_incar, replace_or_append
 from .parsers import (
     LocpotData,
     calculate_vacuum_reference_potential_vs_she,
@@ -23,6 +23,7 @@ from .parsers import (
     surface_charge,
 )
 from .reference_settings import summary_reference_fields
+from .sampling import kpoints_required
 from .scheduler import SlurmScheduler
 
 
@@ -67,6 +68,9 @@ def prepare_jobs(
         nelect_ref = parse_outcar(base / "OUTCAR").nelect
 
     _require_existing(base / "INCAR")
+    require_kpoints = kpoints_required(base)
+    if require_kpoints:
+        _require_existing(base / "KPOINTS")
     _require_existing(base / "CONTCAR")
     _require_existing(base / SUBMISSION_SCRIPT)
 
@@ -87,6 +91,8 @@ def prepare_jobs(
         if resume and is_converged(target):
             continue
 
+        if not require_kpoints and ((target / "KPOINTS").exists() or (target / "KPOINTS").is_symlink()):
+            raise ValueError(f"existing {target / 'KPOINTS'} would override native KSPACING; archive or resolve it before preparing")
         target.mkdir(parents=True, exist_ok=True)
         for filename in config.copy_files:
             source = base / filename
@@ -463,11 +469,11 @@ def _outcar_is_neutral(path: Path, nelect_ref: float) -> bool:
 def _active_incar_nelect(path: Path) -> Optional[float]:
     if not Path(path).exists():
         return None
-    for line in Path(path).read_text(encoding="utf-8", errors="ignore").splitlines():
-        match = re.match(r"\s*NELECT\s*=\s*([-+]?\d*\.?\d+(?:[Ee][-+]?\d+)?)", line)
-        if match:
-            return float(match.group(1))
-    return None
+    value = parse_incar(Path(path).read_text(encoding="utf-8", errors="ignore")).get("NELECT", "")
+    try:
+        return float(value.upper().replace("D", "E"))
+    except ValueError:
+        return None
 
 
 def _input_modified_after_outcar_start(path: Path, outcar_start_timestamp: Optional[float]) -> bool:
@@ -535,6 +541,8 @@ def _child_job_name(base_job_name: str, folder_name: str) -> str:
 
 def _validate_submit_folder(folder: Path, script: str) -> None:
     for filename in ("INCAR", "POSCAR", "POTCAR", "KPOINTS", script):
+        if filename == "KPOINTS" and not kpoints_required(folder):
+            continue
         _require_existing(folder / filename)
 
 
