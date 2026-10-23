@@ -1021,7 +1021,11 @@ def collection_source_fingerprint(base: Path, config: KitConfig, state=None) -> 
                 if not stat.S_ISREG(info.st_mode):
                     raise ValueError(f"collection source must be a regular file: {path}")
                 signature = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
-            sources[str(path.relative_to(base))] = signature
+            try:
+                source_path = path.relative_to(base)
+            except ValueError:
+                source_path = path.absolute()
+            sources[str(source_path)] = signature
     payload = {"version": 1, "profile": config.profile, "workflow": asdict(config.workflow), "runs": runs, "sources": sources}
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 

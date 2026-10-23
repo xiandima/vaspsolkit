@@ -6,6 +6,7 @@
 - Verify installed-wheel imports outside the source tree and exercise the documented offline setup and five-point postprocessing journey from the installed CLI.
 - Reject path-like POSCAR element labels before input staging, preserve relative-PATH VASPKIT launchers, and recognize fractional-hydrogen POTCAR variants.
 - Route batch CLI submissions through durable receipts, enforce selected-job concurrency limits, and require recollection after source/run changes before recommending existing results.
+- Preserve read-only external submission configs, collection from external job roots, and prepared-child submission without a root script; recheck sources after confirmation.
 - Rewrite README as a first-use guide; separate input/command/recovery instructions, installation help and contributor details into linked guides.
 - Offer optional reusable pseudopotential settings in the input-completion menu, default to not saving, and explain how to retry incomplete inputs.
 - Fail promptly for missing initialization/reference parameters in non-TTY sessions, with open-stdin regressions and no write or scheduler side effects.

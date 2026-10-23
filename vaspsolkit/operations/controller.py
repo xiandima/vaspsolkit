@@ -144,6 +144,7 @@ class _ChargeSubmitPayload:
     fingerprints: Tuple[_EntryFingerprint, ...]
     state_before: dict
     config_before: bytes
+    config_fingerprint: _EntryFingerprint
     config_after: str = ""
 
 
@@ -604,7 +605,11 @@ class WorkbenchController:
         elif action == "submit-selected":
             if resources is None:
                 raise ValueError("submit-selected requires resources")
-            self.preview_resources(resources)
+            if not isinstance(resources, ResourceRequest):
+                raise TypeError("resources must be ResourceRequest")
+            resources.validate()
+            if resources.persist:
+                self._config_relative()
             names = tuple(dict.fromkeys(str(name).strip() for name in selected if str(name).strip()))
             if not names:
                 raise ValueError("submit-selected requires at least one selected job")
@@ -661,12 +666,13 @@ class WorkbenchController:
                 if resources.persist
                 else ()
             )
-            watched = [config_path, state_path]
+            watched = [state_path]
             for name in names:
                 record = state.jobs.get(name)
                 if record is None:
                     continue
                 folder = self.workdir / record.folder
+                self._validate_script_path(resources, folder=folder)
                 watched.extend(
                     folder / filename
                     for filename in (
@@ -688,6 +694,7 @@ class WorkbenchController:
                 fingerprints=fingerprints,
                 state_before=_workflow_state_dict(state),
                 config_before=config_before,
+                config_fingerprint=_fingerprint(config_path.parent, config_path),
                 config_after=config_after,
             )
             plan = ActionPlan(
@@ -1453,6 +1460,8 @@ class WorkbenchController:
             for expected in payload.fingerprints:
                 if _fingerprint(self.workdir, self.workdir / expected.relative) != expected:
                     raise RuntimeError(f"{expected.relative} 已变化，请重新预览。")
+            if collection_source_fingerprint(self.workdir, payload.config) != payload.source_fingerprint:
+                raise RuntimeError("collection sources changed; collect again before using these results")
             payload.output_path.parent.mkdir(parents=True, exist_ok=True)
             _atomic_write_text(payload.output_path, payload.after)
             record_collection(self.workdir, payload.config, payload.source_fingerprint)
@@ -1773,6 +1782,9 @@ class WorkbenchController:
         ]
         for record in state.jobs.values():
             folder = self.workdir / record.folder
+            # External read-only sources are covered by source_fingerprint.
+            if not folder.resolve().is_relative_to(self.workdir):
+                continue
             watched.extend(folder / name for name in ("INCAR", "OUTCAR", "LOCPOT"))
         fingerprints = tuple(
             _fingerprint(self.workdir, path) for path in dict.fromkeys(watched)
@@ -1856,6 +1868,8 @@ class WorkbenchController:
         receipt, receipt_error = self._submission_barrier()
         if receipt is not None or receipt_error:
             raise RuntimeError("存在提交恢复屏障；禁止新的带电任务提交。")
+        if _fingerprint(self.config_path.parent, self.config_path) != payload.config_fingerprint:
+            raise RuntimeError("submission config changed; preview again before submitting")
         for expected in payload.fingerprints:
             if _fingerprint(self.workdir, self.workdir / expected.relative) != expected:
                 raise RuntimeError(f"{expected.relative} 已变化，请重新预览。")
@@ -2052,9 +2066,9 @@ class WorkbenchController:
             self.activity_state_root,
         )
 
-    def _validate_script_path(self, resources: ResourceRequest) -> None:
+    def _validate_script_path(self, resources: ResourceRequest, *, folder: Optional[Path] = None) -> None:
         try:
-            script = (self.workdir / resources.script).resolve(strict=True)
+            script = ((folder if folder is not None else self.workdir) / resources.script).resolve(strict=True)
             script.relative_to(self.workdir)
             if not script.is_file():
                 raise ValueError

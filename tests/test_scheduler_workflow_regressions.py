@@ -5,6 +5,7 @@ import json
 import shlex
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 from threading import Barrier
 
@@ -310,3 +311,175 @@ def test_next_prints_parseable_selected_command_without_authorizing_it(tmp_path)
     assert args.jobs == ["1", "2", "3"]
     assert args.workdir == str(case)
     assert not args.yes
+
+
+@pytest.mark.parametrize("collection_entry", ["cli", "controller"])
+@pytest.mark.parametrize("changed_file", ["KPOINTS", "OUTCAR"])
+def test_external_job_root_collection_tracks_source_changes(tmp_path, monkeypatch, collection_entry, changed_file):
+    case = tmp_path / "case"
+    config, state = prepared_case(case)
+    external = tmp_path / "external jobs"
+    (case / "charge_sweep").rename(external)
+    config.workflow.job_root = str(external)
+    config.validate()
+    write_kit_config(case / "vaspsolkit.json", config)
+    for name, record in state.jobs.items():
+        record.folder = str(external / name)
+        record.status = "CONVERGED"
+    state.save(case / STATE_FILENAME)
+    monkeypatch.setattr(cli, "collect_results", fake_collect)
+    monkeypatch.setattr("vaspsolkit.operations.controller.collect_results", fake_collect)
+
+    def collect():
+        if collection_entry == "cli":
+            assert cli.main(["collect", "--workdir", str(case)], output=lambda _: None) == 0
+        else:
+            controller = WorkbenchController(case)
+            assert controller.execute(controller.plan("collect"), confirmed=True).ok
+
+    fake_collect(case, config.workflow)
+    write_fit(case)
+    assert recommend_action(build_snapshot(case)).name == "collect"
+    collect()
+    assert recommend_action(build_snapshot(case)).name == "results-ready"
+    (external / "2" / changed_file).write_text("changed external source\n")
+    assert recommend_action(build_snapshot(case)).name == "collect"
+    collect()
+    assert recommend_action(build_snapshot(case)).name == "results-ready"
+
+
+def test_external_collection_change_after_preview_preserves_summary(tmp_path, monkeypatch):
+    case = tmp_path / "case"
+    config, state = prepared_case(case)
+    external = tmp_path / "external jobs"
+    (case / "charge_sweep").rename(external)
+    config.workflow.job_root = str(external)
+    write_kit_config(case / "vaspsolkit.json", config)
+    for name, record in state.jobs.items():
+        record.folder, record.status = str(external / name), "CONVERGED"
+    state.save(case / STATE_FILENAME)
+    fake_collect(case, config.workflow)
+    summary = case / "results" / "summary.csv"
+    summary.write_text("legacy summary must survive\n")
+    monkeypatch.setattr("vaspsolkit.operations.controller.collect_results", fake_collect)
+    controller = WorkbenchController(case)
+    plan = controller.plan("collect")
+    (external / "2" / "OUTCAR").write_text("changed after preview\n")
+    with pytest.raises(RuntimeError, match="sources changed"):
+        controller.execute(plan, confirmed=True)
+    assert summary.read_text() == "legacy summary must survive\n"
+
+
+@pytest.mark.parametrize("command", ["submit", "submit-selected"])
+def test_cli_external_config_is_read_only_and_receipt_guarded(tmp_path, monkeypatch, command):
+    case = tmp_path / "case"
+    prepared_case(case, count=2)
+    external = tmp_path / "external config.json"
+    (case / "vaspsolkit.json").rename(external)
+    before = external.read_bytes()
+    scheduler = FakeSlurm(fail_at=2)
+    original_run = scheduler.run
+
+    def guarded_run(argv, cwd):
+        if argv[0] == "sbatch":
+            receipt = read_submission_receipt(case)
+            assert receipt.status == "SUBMITTING"
+            assert receipt.resources["target_job"] == Path(cwd).name
+        return original_run(argv, cwd)
+
+    scheduler.runner = guarded_run
+    monkeypatch.setattr(cli, "scheduler_from_config", lambda _: scheduler)
+    args = [command, "--workdir", str(case), "--config", str(external), "--yes"]
+    if command == "submit-selected":
+        args.extend(["1", "2"])
+    with pytest.raises(RuntimeError):
+        cli.main(args, output=lambda _: None)
+    assert scheduler.calls == ["1", "2"]
+    assert WorkflowState.load(case / STATE_FILENAME).jobs["1"].job_id == "9001"
+    assert read_submission_receipt(case).resources["target_job"] == "2"
+    with pytest.raises(RuntimeError):
+        cli.main(args, output=lambda _: None)
+    assert scheduler.calls == ["1", "2"]
+    assert external.read_bytes() == before
+    assert not (case / "vaspsolkit.json").exists()
+
+
+@pytest.mark.parametrize("command", ["submit", "submit-selected"])
+def test_external_config_edit_during_cli_confirmation_blocks_submit(tmp_path, monkeypatch, command):
+    case = tmp_path / "case"
+    config, _ = prepared_case(case, count=1)
+    external = tmp_path / "external.json"
+    (case / "vaspsolkit.json").rename(external)
+    scheduler = FakeSlurm()
+    monkeypatch.setattr(cli, "scheduler_from_config", lambda _: scheduler)
+
+    def confirm(_):
+        config.scheduler.partition = "edited-during-confirmation"
+        write_kit_config(external, config)
+        return "yes"
+
+    args = [command, "--workdir", str(case), "--config", str(external)]
+    if command == "submit-selected":
+        args.append("1")
+    with pytest.raises(RuntimeError):
+        cli.main(args, input_fn=confirm, output=lambda _: None)
+    assert scheduler.calls == []
+    assert read_submission_receipt(case) is None
+
+
+def test_external_config_cannot_persist_resource_overrides(tmp_path):
+    case = tmp_path / "case"
+    config, _ = prepared_case(case, count=1)
+    external = tmp_path / "external.json"
+    (case / "vaspsolkit.json").rename(external)
+    before = external.read_bytes()
+    controller = WorkbenchController(case, config_path=external)
+    with pytest.raises(ValueError, match="within the Case"):
+        controller.plan("submit-selected", replace(resources_from_config(config), persist=True), selected=("1",))
+    assert external.read_bytes() == before
+    assert read_submission_receipt(case) is None
+
+
+@pytest.mark.parametrize("command", ["submit", "submit-selected"])
+def test_cli_prepared_children_do_not_require_root_script(tmp_path, monkeypatch, command):
+    case = tmp_path / "case"
+    prepared_case(case, count=2)
+    (case / "vasp.slurm").unlink()
+    scheduler = FakeSlurm()
+    monkeypatch.setattr(cli, "scheduler_from_config", lambda _: scheduler)
+    args = [command, "--workdir", str(case), "--yes"]
+    if command == "submit-selected":
+        args.extend(["1", "2"])
+    assert cli.main(args, output=lambda _: None) == 0
+    assert scheduler.calls == ["1", "2"]
+    assert all(record.status == "SUBMITTED" for record in WorkflowState.load(case / STATE_FILENAME).jobs.values())
+    assert read_submission_receipt(case) is None
+
+
+@pytest.mark.parametrize("unsafe", ["missing", "symlink"])
+def test_selected_child_script_must_be_safe_before_any_submission(tmp_path, monkeypatch, unsafe):
+    case = tmp_path / "case"
+    prepared_case(case, count=2)
+    script = case / "charge_sweep" / "2" / "vasp.slurm"
+    script.unlink()
+    if unsafe == "symlink":
+        external = tmp_path / "outside.slurm"
+        external.write_text("external script\n")
+        script.symlink_to(external)
+    scheduler = FakeSlurm()
+    monkeypatch.setattr(cli, "scheduler_from_config", lambda _: scheduler)
+    with pytest.raises(ValueError):
+        cli.main(["submit", "--workdir", str(case), "--yes"], output=lambda _: None)
+    assert scheduler.calls == []
+    assert read_submission_receipt(case) is None
+
+
+def test_neutral_submission_still_requires_root_script(tmp_path):
+    case = tmp_path / "case"
+    config, state = prepared_case(case, count=1)
+    (case / "vasp.slurm").unlink()
+    state.neutral.status, state.neutral.job_id = "PREPARED", ""
+    state.save(case / STATE_FILENAME)
+    controller = WorkbenchController(case)
+    with pytest.raises(ValueError, match="script"):
+        controller.plan("submit-neutral", resources_from_config(config))

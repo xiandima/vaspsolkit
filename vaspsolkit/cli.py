@@ -240,10 +240,6 @@ def main(
         scheduler = scheduler_from_config(config.scheduler)
         preview = submission_preview(config, state, scheduler=scheduler)
         _print_plan(config, preview, output)
-        confirmed = args.yes or (not args.dry_run and _confirm("Submit the first batch?", input_fn))
-        if not confirmed and not args.dry_run:
-            output("submission cancelled")
-            return 1
         batch = preview["batches"][0] if preview["batches"] else []
         if not batch:
             output("no prepared jobs fit the current max_inflight capacity")
@@ -251,20 +247,18 @@ def main(
         return _submit_selected_once(
             workdir, config, config_path, batch,
             resources=resources_from_config(config),
-            confirmed=confirmed, dry_run=args.dry_run, output=output,
+            confirmed=args.yes, dry_run=args.dry_run, output=output,
+            confirm=lambda: _confirm("Submit the first batch?", input_fn),
         )
     if args.command == "submit-selected":
         resources = _submission_resources(config, args)
-        confirmed = args.yes or (not args.dry_run and _confirm("Submit selected charge jobs?", input_fn))
-        if not confirmed and not args.dry_run:
-            output("submission cancelled")
-            return 1
         return _submit_selected_once(
             workdir, config, config_path, list(args.jobs),
             resources=resources,
-            confirmed=confirmed,
+            confirmed=args.yes,
             dry_run=args.dry_run,
             output=output,
+            confirm=lambda: _confirm("Submit selected charge jobs?", input_fn),
         )
     if args.command == "reset-queued":
         state = load_state(workdir)
@@ -931,6 +925,7 @@ def _submit_selected_once(
     confirmed: bool,
     dry_run: bool,
     output: OutputFn,
+    confirm: Optional[Callable[[], bool]] = None,
 ) -> int:
     if dry_run:
         effective = _config_with_submission_resources(config, resources)
@@ -959,6 +954,11 @@ def _submit_selected_once(
     plan = controller.plan("submit-selected", resources, selected=tuple(jobs))
     if plan.blocked_reason:
         raise RuntimeError(f"{plan.blocked_reason}；禁止重复 sbatch。")
+    if not confirmed and confirm is not None:
+        confirmed = confirm()
+    if not confirmed:
+        output("submission cancelled")
+        return 1
     result = controller.execute(plan, confirmed=confirmed)
     if not result.ok:
         detail = result.error.suggestion_zh if result.error is not None else result.message
