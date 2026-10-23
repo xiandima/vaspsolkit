@@ -1,0 +1,283 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="zh-CN" data-content_root="./">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>服务器适配 &mdash; VASPsolKit 用户手册</title>
+      <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="_static/css/theme.css?v=9edc463e" />
+      <link rel="stylesheet" type="text/css" href="_static/copybutton.css?v=76b2166b" />
+      <link rel="stylesheet" type="text/css" href="_static/manual.css?v=2d1a1fb2" />
+
+  
+    <link rel="canonical" href="https://xiandima.github.io/vaspsolkit/CLUSTER_CONFIGURATION.html" />
+      <script src="_static/jquery.js?v=5d32c60e"></script>
+      <script src="_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="_static/documentation_options.js?v=b13c26e8"></script>
+      <script src="_static/doctools.js?v=9bcbadda"></script>
+      <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+      <script src="_static/clipboard.min.js?v=a7894cd8"></script>
+      <script src="_static/copybutton.js?v=7654a337"></script>
+      <script src="_static/translations.js?v=beaddf03"></script>
+    <script src="_static/js/theme.js"></script>
+    <link rel="index" title="索引" href="genindex.html" />
+    <link rel="search" title="搜索" href="search.html" />
+    <link rel="next" title="中性计算与五点扫描" href="workflow.html" />
+    <link rel="prev" title="准备输入与 VASPKIT" href="inputs.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search"  style="background: #176d72" >
+
+          
+          
+          <a href="index.html" class="icon icon-home">
+            VASPsolKit
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="搜索文档" aria-label="搜索文档" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="导航菜单">
+              <p class="caption" role="heading"><span class="caption-text">开始使用</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="quickstart.html">第一次计算</a></li>
+<li class="toctree-l1"><a class="reference internal" href="INSTALLATION.html">安装与升级</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">计算流程</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="inputs.html">准备输入与 VASPKIT</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">服务器适配</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#id2">首次接入一台服务器</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id3">支持范围</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id4">本机脚本</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id5">选择资源</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id6">排队与状态</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#custom">Custom 适配边界</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="workflow.html">中性计算与五点扫描</a></li>
+<li class="toctree-l1"><a class="reference internal" href="recovery.html">检查与恢复</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">结果与方法</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="results.html">E-U 结果与示例</a></li>
+<li class="toctree-l1"><a class="reference internal" href="reaction.html">吸附能与反应分析</a></li>
+<li class="toctree-l1"><a class="reference internal" href="SCIENTIFIC_CONVENTIONS.html">计算与后处理约定</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">查询与参考</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="commands.html">菜单与命令查询</a></li>
+<li class="toctree-l1"><a class="reference internal" href="COMPATIBILITY.html">实测兼容性与限制</a></li>
+<li class="toctree-l1"><a class="reference internal" href="USER_GUIDE.html">使用手册</a></li>
+<li class="toctree-l1"><a class="reference internal" href="versions.html">版本说明</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="移动版导航菜单"  style="background: #176d72" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="index.html">VASPsolKit</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="页面导航">
+  <ul class="wy-breadcrumbs">
+      <li><a href="index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">服务器适配</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="id1">
+<h1>服务器适配<a class="headerlink" href="#id1" title="Link to this heading"></a></h1>
+<p><a class="reference internal" href="index.html"><span class="std std-doc">手册首页</span></a> · <a class="reference internal" href="USER_GUIDE.html"><span class="std std-doc">使用手册</span></a></p>
+<p>换服务器时不需要改 Python 源码。先准备该服务器上可用的提交脚本，再在 Case 中确认资源。
+SLURM 用户使用下面的标准流程；其他调度器需准备命令包装脚本，见<a class="reference internal" href="#custom">Custom 适配边界</a>。</p>
+<section id="id2">
+<h2>首次接入一台服务器<a class="headerlink" href="#id2" title="Link to this heading"></a></h2>
+<ol class="arabic simple">
+<li><p>向管理员或已有作业确认：分区名、节点核数、允许的 walltime，以及所需 account/QOS/内存。</p></li>
+<li><p>将本机已验证的脚本放进 Case，建议命名为 <code class="docutils literal notranslate"><span class="pre">vasp.slurm</span></code>。确认其中的环境加载和 VASP 启动行。</p></li>
+<li><p>在菜单提交界面选择本机资源，先阅读最终配置，再明确输入 <code class="docutils literal notranslate"><span class="pre">SUBMIT</span></code>。指定节点时先选分区。</p></li>
+</ol>
+<p>首次适配建议用小体系试算，检查作业真正启动、输出完整且电子/离子收敛，再扩大批量。
+输入准备和 dry-run 可离线测试，但不能证明真实队列、MPI 或 VASP 环境可用。
+公共仓库不提供机构专属模块路径、账户、VASP 可执行文件或赝势。</p>
+</section>
+<section id="id3">
+<h2>支持范围<a class="headerlink" href="#id3" title="Link to this heading"></a></h2>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>项目</p></th>
+<th class="head"><p>当前行为</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>分区、节点数、总 tasks、每节点 tasks、walltime</p></td>
+<td><p>受管理提交显式传给 sbatch</p></td>
+</tr>
+<tr class="row-odd"><td><p>自动分配</p></td>
+<td><p>默认 compute 分区，不绑定节点；分区名可修改</p></td>
+</tr>
+<tr class="row-even"><td><p>指定节点</p></td>
+<td><p>先分区，再选择该分区内节点，传入 --nodelist</p></td>
+</tr>
+<tr class="row-odd"><td><p>MPI/VASP</p></td>
+<td><p>受管理 profile 仅支持 mpirun + vasp_std</p></td>
+</tr>
+<tr class="row-even"><td><p>account、qos、GPU 等</p></td>
+<td><p>没有通用的对应向导；在本机脚本中明确配置并独立验证</p></td>
+</tr>
+<tr class="row-odd"><td><p>memory 字段</p></td>
+<td><p>JSON 可存储，但当前 SlurmScheduler.submit 不将它转成 --mem；实际内存请求须写入脚本</p></td>
+</tr>
+<tr class="row-even"><td><p>module_init/modules</p></td>
+<td><p>不能替代脚本里的环境初始化，须核对脚本正文</p></td>
+</tr>
+<tr class="row-odd"><td><p>PBS</p></td>
+<td><p>内置实现已移除，不自动转换旧 PBS 资源</p></td>
+</tr>
+</tbody>
+</table>
+<p>起始值 compute、1 节点、96 tasks、96 tasks/node、72:00:00 <strong>未经修改就会用于提交</strong>。
+它们不是跨集群推荐资源。tasks 指 MPI ranks，不等于 GPU 数或 OpenMP 线程数；请按本机
+节点容量及 VASP 并行约定设置。不要只把 launcher 字段换成 srun 后就认为已适配。
+未修改的默认启动命令等价于 <code class="docutils literal notranslate"><span class="pre">mpirun</span> <span class="pre">-np</span> <span class="pre">96</span> <span class="pre">vasp_std</span></code>，核数改变后应检查启动行与请求一致。</p>
+</section>
+<section id="id4">
+<h2>本机脚本<a class="headerlink" href="#id4" title="Link to this heading"></a></h2>
+<p><a class="reference download internal" download="" href="_downloads/9a0fb8342e4601e041ef838582c5db19/slurm.vasp.sh"><span class="xref download myst">公共模板</span></a>是起点，不含资源头或模块加载，需要在服务器上补齐。
+受管理提交会通过 sbatch 显式传资源，脚本资源同步也可能写入对应 <code class="docutils literal notranslate"><span class="pre">#SBATCH</span></code> 行。
+原有 account/qos、环境加载及未管理的头部选项应保留，但仍须阅读差异，不保证任意复杂
+脚本都可自动理解。脚本采用唯一、明确的启动行：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>mpirun<span class="w"> </span>-np<span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">SLURM_NTASKS</span><span class="si">}</span><span class="s2">"</span><span class="w"> </span>vasp_std<span class="w"> </span>&gt;<span class="w"> </span>vasp.log<span class="w"> </span><span class="m">2</span>&gt;<span class="p">&amp;</span><span class="m">1</span>
+</pre></div>
+</div>
+<p>不要把该行改成动态可执行文件变量或多重启动分支后继续依赖资源自动改写；不被识别的
+启动行可能保留并另添启动命令。确认预览中只有一次 VASP 启动。已修正公共模板，使其
+资源同步后保持唯一启动行。替代可执行文件或复杂 launcher 需要单独适配，不是内置功能。</p>
+<p><code class="docutils literal notranslate"><span class="pre">#SBATCH</span> <span class="pre">--output/--error</span></code> 收集 SLURM 作业 shell 的输出；上述重定向将 VASP stdout/stderr
+合并写入 vasp.log，并非独立的 VASP stderr 文件。环境模块须与 mpirun 和 vasp_std 匹配。
+直接 sbatch 模板属于绕过工作流的提交，不能获得 Case 状态与确认屏障，不作为快速入门。</p>
+</section>
+<section id="id5">
+<h2>选择资源<a class="headerlink" href="#id5" title="Link to this heading"></a></h2>
+<p>菜单提交时可选自动或指定，两者都可先选择当前服务器的分区。自动分配不绑定节点；当前
+配置的分区仍存在时可回车沿用，否则需明确输入有效分区。查询失败时不会猜测分区。
+单节点自动分配的 tasks-per-node 随总 tasks 更新，多节点仍保留配置中的节点数和每节点 tasks。
+指定策略先选分区，再查看分区内节点；资源预检会参考当前
+空闲核心，因此可能拒绝暂时没有足够空闲核心的选择。快照不是节点预留，也不保证立即运行。</p>
+<p>提交菜单里的 walltime 和脚本目前沿用 Case 配置，不在这一步询问修改。需要调整时，先取消
+提交，在 <code class="docutils literal notranslate"><span class="pre">vaspsolkit.json</span></code> 的 scheduler 中修改 <code class="docutils literal notranslate"><span class="pre">walltime</span></code> / <code class="docutils literal notranslate"><span class="pre">script</span></code>，再打开菜单核对；
+不要在其他操作正写入配置时编辑。指定节点用户也可用下面的 configure-scheduler 同时设置时限。</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>vaspsolkit<span class="w"> </span>configure-scheduler<span class="w"> </span>--workdir<span class="w"> </span>/path/to/my-case
+vaspsolkit<span class="w"> </span>plan<span class="w"> </span>--workdir<span class="w"> </span>/path/to/my-case
+</pre></div>
+</div>
+<p>CLI <code class="docutils literal notranslate"><span class="pre">configure-scheduler</span></code> 是指定节点配置入口，验证成功后立即写入 JSON；没有留空节点
+即可切换自动模式的承诺。自动分配可在菜单选择，也可使用提交资源参数，例如先预览：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>vaspsolkit<span class="w"> </span>submit-neutral<span class="w"> </span>--workdir<span class="w"> </span>/path/to/my-case<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--resource-allocation<span class="w"> </span>auto<span class="w"> </span>--resource-partition<span class="w"> </span>compute<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--resource-node-count<span class="w"> </span><span class="m">1</span><span class="w"> </span>--resource-tasks<span class="w"> </span><span class="m">96</span><span class="w"> </span>--resource-tasks-per-node<span class="w"> </span><span class="m">96</span><span class="w"> </span>--dry-run
+</pre></div>
+</div>
+<p>上述数字仅演示参数；先核对本机需求再取消 dry-run。时限仍取已保存配置，不会因修改
+tasks 而自动匹配本机政策。<code class="docutils literal notranslate"><span class="pre">--save-resources</span></code> 可将本次资源选择保存，须先审核。
+<code class="docutils literal notranslate"><span class="pre">submit-selected</span></code> 提供同组资源参数；不要把它们套在不支持这些参数的低层 <code class="docutils literal notranslate"><span class="pre">submit</span></code> 命令上。</p>
+</section>
+<section id="id6">
+<h2>排队与状态<a class="headerlink" href="#id6" title="Link to this heading"></a></h2>
+<p>建议显式设置有限的 <code class="docutils literal notranslate"><span class="pre">scheduler.max_inflight</span></code>。默认 null 不做该层并发限制；一次操作
+可能提交全部已选且就绪的任务。设置上限后需按当前 Case 活跃任务分批操作，它不是全局
+用户配额管理器，也不是后台自动补交服务。</p>
+<p>菜单状态跟踪只跟随当前 Case 已记录的 Job ID；plan/资源查看可读取队列快照，但不会
+因此认领其他任务。squeue 离队后用 sacct 确认终态与 ExitCode，再独立检查 VASP 输出。
+UNKNOWN、回执不确定、查询失败均不能作为重复提交的依据。资源 dry-run 不启动 VASP；
+本地 fixture 测试通过也不代表真实集群已经验收。</p>
+</section>
+<section id="custom">
+<h2>Custom 适配边界<a class="headerlink" href="#custom" title="Link to this heading"></a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">kind:</span> <span class="pre">custom</span></code> 是低层命令适配器，不是已经打通的另一套交互资源菜单。命令以参数数组
+配置，不隐式经 shell 展开；唯一内置占位符为 <code class="docutils literal notranslate"><span class="pre">{script}</span></code>、<code class="docutils literal notranslate"><span class="pre">{job_id}</span></code>。例如 scheduler 部分：</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"custom"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"script"</span><span class="p">:</span><span class="w"> </span><span class="s2">"submit.sh"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"submit_command"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"site-submit"</span><span class="p">,</span><span class="w"> </span><span class="s2">"{script}"</span><span class="p">],</span>
+<span class="w">  </span><span class="nt">"status_command"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"site-status"</span><span class="p">,</span><span class="w"> </span><span class="s2">"{job_id}"</span><span class="p">],</span>
+<span class="w">  </span><span class="nt">"cancel_command"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"site-cancel"</span><span class="p">,</span><span class="w"> </span><span class="s2">"{job_id}"</span><span class="p">],</span>
+<span class="w">  </span><span class="nt">"inspect_command"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"site-queue"</span><span class="p">],</span>
+<span class="w">  </span><span class="nt">"job_id_pattern"</span><span class="p">:</span><span class="w"> </span><span class="s2">"JobID=(?P&lt;job_id&gt;[0-9]+)"</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>这些 site-* 是须自行实现并验证的包装程序，不是随包提供的命令。status 的第一行须返回
+工作流可识别的单一状态（如 RUNNING、COMPLETED），不能直接返回任意队列表；空输出或
+失败按未知处理。inspect 只保存原始文本，不具备结构化分区/节点容量检查。
+需要测试提交回执、状态映射、取消和异常恢复后再使用；不能只改 kind 就宣称全流程适配。</p>
+<p>对于输入齐全的新 Case，可以用以下命令初始化。路径和包装程序替换成自己的值，SHE 数值
+与来源也需按方法确认；<code class="docutils literal notranslate"><span class="pre">--yes</span></code> 会写入配置，但本命令不提交任务：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>vaspsolkit<span class="w"> </span>init<span class="w"> </span>--workdir<span class="w"> </span><span class="s2">"/path/to/my case"</span><span class="w"> </span>--yes<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--scheduler<span class="w"> </span>custom<span class="w"> </span>--script<span class="w"> </span>submit.sh<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--she-reference<span class="w"> </span><span class="m">4</span>.70<span class="w"> </span>--she-reference-source<span class="w"> </span><span class="s2">"替换为实际参考来源"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--submit-command<span class="w"> </span><span class="s1">'"/path/to/site tools/site-submit" "{script}"'</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--status-command<span class="w"> </span><span class="s1">'"/path/to/site tools/site-status" "{job_id}"'</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--cancel-command<span class="w"> </span><span class="s1">'"/path/to/site tools/site-cancel" "{job_id}"'</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--inspect-command<span class="w"> </span><span class="s1">'"/path/to/site tools/site-queue"'</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--job-id-regex<span class="w"> </span><span class="s1">'JobID=(?P&lt;job_id&gt;[0-9]+)'</span>
+</pre></div>
+</div>
+<p>这些命令按 Shell 风格引号拆分为参数，<strong>不经过 Shell</strong>。不会展开 <code class="docutils literal notranslate"><span class="pre">$HOME</span></code>、<code class="docutils literal notranslate"><span class="pre">~</span></code>、通配符、
+管道或重定向，只替换 <code class="docutils literal notranslate"><span class="pre">{script}</span></code> 和 <code class="docutils literal notranslate"><span class="pre">{job_id}</span></code>；需要这类逻辑时写进自己的包装脚本。
+custom 的提交命令必填，其他命令可选；不配置 status 会保留 UNKNOWN，不配置 cancel 无法取消。</p>
+<p>custom 用户使用<a class="reference internal" href="USER_GUIDE.html#id6"><span class="std std-ref">直接命令流程</span></a>，不使用 SLURM 专属资源菜单或
+<code class="docutils literal notranslate"><span class="pre">configure-scheduler</span></code>。不要为 custom 套用 <code class="docutils literal notranslate"><span class="pre">--resource-*</span></code> 参数；资源由自己的脚本或包装器管理。
+初始化不会验证包装程序真实可用，先用测试任务确认 Job ID 提取和状态查询正确，再运行生产计算。</p>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="页脚">
+        <a href="inputs.html" class="btn btn-neutral float-left" title="准备输入与 VASPKIT" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> 上一页</a>
+        <a href="workflow.html" class="btn btn-neutral float-right" title="中性计算与五点扫描" accesskey="n" rel="next">下一页 <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; 版权所有 2026, VASPsolKit contributors。</p>
+  </div>
+
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

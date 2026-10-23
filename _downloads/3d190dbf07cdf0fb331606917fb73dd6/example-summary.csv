@@ -1,0 +1,6 @@
+folder,converged,fit_included,delta_electrons,u_vs_she,energy_at_potential,she_reference_eV,she_reference_source,method_fingerprint
+1,1,1,-1.0,1.0,-10.64,4.70,synthetic example only,synthetic-quadratic-demo-v1
+2,1,1,-0.5,0.5,-10.09,4.70,synthetic example only,synthetic-quadratic-demo-v1
+3,1,1,0.0,0.0,-10.04,4.70,synthetic example only,synthetic-quadratic-demo-v1
+4,1,1,0.5,-0.5,-10.49,4.70,synthetic example only,synthetic-quadratic-demo-v1
+5,1,1,1.0,-1.0,-11.44,4.70,synthetic example only,synthetic-quadratic-demo-v1

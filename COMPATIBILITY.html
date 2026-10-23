@@ -1,0 +1,352 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="zh-CN" data-content_root="./">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>实测兼容性与限制 &mdash; VASPsolKit 用户手册</title>
+      <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="_static/css/theme.css?v=9edc463e" />
+      <link rel="stylesheet" type="text/css" href="_static/copybutton.css?v=76b2166b" />
+      <link rel="stylesheet" type="text/css" href="_static/manual.css?v=2d1a1fb2" />
+
+  
+    <link rel="canonical" href="https://xiandima.github.io/vaspsolkit/COMPATIBILITY.html" />
+      <script src="_static/jquery.js?v=5d32c60e"></script>
+      <script src="_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="_static/documentation_options.js?v=b13c26e8"></script>
+      <script src="_static/doctools.js?v=9bcbadda"></script>
+      <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+      <script src="_static/clipboard.min.js?v=a7894cd8"></script>
+      <script src="_static/copybutton.js?v=7654a337"></script>
+      <script src="_static/translations.js?v=beaddf03"></script>
+    <script src="_static/js/theme.js"></script>
+    <link rel="index" title="索引" href="genindex.html" />
+    <link rel="search" title="搜索" href="search.html" />
+    <link rel="next" title="使用手册" href="USER_GUIDE.html" />
+    <link rel="prev" title="菜单与命令查询" href="commands.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search"  style="background: #176d72" >
+
+          
+          
+          <a href="index.html" class="icon icon-home">
+            VASPsolKit
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="搜索文档" aria-label="搜索文档" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="导航菜单">
+              <p class="caption" role="heading"><span class="caption-text">开始使用</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="quickstart.html">第一次计算</a></li>
+<li class="toctree-l1"><a class="reference internal" href="INSTALLATION.html">安装与升级</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">计算流程</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="inputs.html">准备输入与 VASPKIT</a></li>
+<li class="toctree-l1"><a class="reference internal" href="CLUSTER_CONFIGURATION.html">服务器适配</a></li>
+<li class="toctree-l1"><a class="reference internal" href="workflow.html">中性计算与五点扫描</a></li>
+<li class="toctree-l1"><a class="reference internal" href="recovery.html">检查与恢复</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">结果与方法</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="results.html">E-U 结果与示例</a></li>
+<li class="toctree-l1"><a class="reference internal" href="reaction.html">吸附能与反应分析</a></li>
+<li class="toctree-l1"><a class="reference internal" href="SCIENTIFIC_CONVENTIONS.html">计算与后处理约定</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">查询与参考</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="commands.html">菜单与命令查询</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">实测兼容性与限制</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#id2">测试环境</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id3">兼容矩阵</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id4">使用边界</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#id5">安装与版本来源</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#id6">输入与脚本</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#id7">离线与恢复</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#id8">复现实测</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="USER_GUIDE.html">使用手册</a></li>
+<li class="toctree-l1"><a class="reference internal" href="versions.html">版本说明</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="移动版导航菜单"  style="background: #176d72" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="index.html">VASPsolKit</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="页面导航">
+  <ul class="wy-breadcrumbs">
+      <li><a href="index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">实测兼容性与限制</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="id1">
+<h1>实测兼容性与限制<a class="headerlink" href="#id1" title="Link to this heading"></a></h1>
+<p>本页对应 <code class="docutils literal notranslate"><span class="pre">0.4.0</span></code> 的未发布工作树，验收日期为 2026-10-22。以下“通过”仅指列出的离线或
+假程序测试，不代表真实集群、VASP 版本或科学结果已经验收。</p>
+<section id="id2">
+<h2>测试环境<a class="headerlink" href="#id2" title="Link to this heading"></a></h2>
+<ul class="simple">
+<li><p>Linux x86_64，Python 3.9.17，pytest 8.3.2；项目声明 Python &gt;=3.9，但本轮未逐一测试更高版本。</p></li>
+<li><p>构建工具 setuptools 68.0.0；运行测试环境 matplotlib 3.9.4。安装测试复用系统依赖，
+在含空格路径的新 venv 中安装当前工作树构建的 wheel，不等同于全新机器依赖下载测试。</p></li>
+<li><p>每个 CLI 子进程使用临时 HOME、状态目录和 PATH。无集群场景的 PATH 为空；假调度器
+仅记录 argv/cwd 并返回固定 Job ID 或状态，绝不执行提交脚本。</p></li>
+<li><p>POSCAR/POTCAR 等均为测试合成文本，POTCAR 仅含解析用元数据，不可用于计算。
+未访问真实调度器、未启动 VASP、未复制真实 POTCAR 或凭据。</p></li>
+</ul>
+</section>
+<section id="id3">
+<h2>兼容矩阵<a class="headerlink" href="#id3" title="Link to this heading"></a></h2>
+<p>主要黑盒证据位于 <a class="reference download internal" download="" href="_downloads/cb72514924e5bcb37a3ff4e69dc37ae3/test_documented_workflows.py"><span class="xref download myst">test_documented_workflows.py</span></a>，
+输入边界和故障证据位于 <a class="reference download internal" download="" href="_downloads/f7793889b3dd2c542bfc1e5bee4c9497/test_input_portability.py"><span class="xref download myst">test_input_portability.py</span></a> 与
+<a class="reference download internal" download="" href="_downloads/f7231679e0d0664ad70dcb88f008d2be/test_scheduler_portability.py"><span class="xref download myst">test_scheduler_portability.py</span></a>；Case 规划的路径限制见
+<a class="reference download internal" download="" href="_downloads/25d95d09755c141178d8bdbc4620c45c/test_vaspsolkit_case_setup.py"><span class="xref download myst">test_vaspsolkit_case_setup.py</span></a>。</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>场景</p></th>
+<th class="head"><p>实测结果</p></th>
+<th class="head"><p>范围与限制</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Case、HOME、源码及 venv 路径含空格</p></td>
+<td><p>通过</p></td>
+<td><p>Shell 中路径加引号；不等于任意脚本文件名都被受管理资源接口接受</p></td>
+</tr>
+<tr class="row-odd"><td><p>wheel 构建、安装与两个入口</p></td>
+<td><p>通过</p></td>
+<td><p>检查 wheel 包名、安装模块位于新 venv、<code class="docutils literal notranslate"><span class="pre">direct_url.json</span></code> 指向该 wheel；验证 <code class="docutils literal notranslate"><span class="pre">vaspsolkit</span></code> 与 <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">-m</span> <span class="pre">vaspsolkit</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>无 VASPKIT、无 VASP、无集群命令</p></td>
+<td><p>通过</p></td>
+<td><p>输入齐全时 <code class="docutils literal notranslate"><span class="pre">init</span> <span class="pre">--yes</span></code>、<code class="docutils literal notranslate"><span class="pre">plan</span> <span class="pre">--offline</span></code>、<code class="docutils literal notranslate"><span class="pre">prepare-neutral</span> <span class="pre">--yes</span></code>、中性提交 <code class="docutils literal notranslate"><span class="pre">--dry-run</span></code>；并非实际计算</p></td>
+</tr>
+<tr class="row-odd"><td><p>无交互 <code class="docutils literal notranslate"><span class="pre">init</span> <span class="pre">--yes</span></code></p></td>
+<td><p>通过</p></td>
+<td><p>显式给出 scheduler/script/SHE reference；缺 INCAR 还须 profile；保持 stdin 打开也不等待输入</p></td>
+</tr>
+<tr class="row-even"><td><p>已有 INCAR、不指定 profile</p></td>
+<td><p>通过</p></td>
+<td><p>保留用户值，补必要标签；冲突和重复标签须人工处理。后续 prepare 使用阶段 profile，须另行核对</p></td>
+</tr>
+<tr class="row-odd"><td><p>用户提交脚本保留</p></td>
+<td><p>通过</p></td>
+<td><p>初始化、准备、中性 CLI dry-run/假提交不覆盖脚本；测试保留 account/qos、自定义正文与文件权限</p></td>
+</tr>
+<tr class="row-even"><td><p>已有 Case 续跑</p></td>
+<td><p>通过</p></td>
+<td><p>假提交后 status/run 保留 Job ID、不重复投递；再次 init 被拒绝且原文件不变；更新 SHE 来源不清空状态</p></td>
+</tr>
+<tr class="row-odd"><td><p>CLI 通用初始化分支写入失败</p></td>
+<td><p>故障注入覆盖</p></td>
+<td><p>INCAR 原子写入；失败时尝试恢复本次已写文件。检测到外部改动时保留改动，并报 manual review 路径；不是崩溃事务</p></td>
+</tr>
+<tr class="row-even"><td><p>无 sinfo 的资源配置</p></td>
+<td><p>安全失败</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">configure-scheduler</span></code> 显示错误，不改已有配置；不是自动推断节点模式</p></td>
+</tr>
+<tr class="row-odd"><td><p>custom 命令路径含空格</p></td>
+<td><p>通过</p></td>
+<td><p>CLI 分词保留参数，假提交/查询/续跑可用；分号和 <code class="docutils literal notranslate"><span class="pre">$HOME</span></code> 作为字面参数传递，不经过 Shell</p></td>
+</tr>
+<tr class="row-even"><td><p>custom 未配置 status</p></td>
+<td><p>明确提示</p></td>
+<td><p>初始化可成功，状态为 UNKNOWN；不表示已具备完整跟踪能力</p></td>
+</tr>
+<tr class="row-odd"><td><p>交互 VASPKIT 补缺失输入</p></td>
+<td><p>假程序通过</p></td>
+<td><p>临时目录运行、仅导入缺失 POTCAR/KPOINTS；已有 INCAR、结构、脚本及另一输入不被工具改动覆盖</p></td>
+</tr>
+<tr class="row-even"><td><p>VASPKIT 失败或输入并发变化</p></td>
+<td><p>安全拒绝</p></td>
+<td><p>对退出码、空文件、符号链接、错误元素、格式错误及交互期间源文件变化有回归测试</p></td>
+</tr>
+<tr class="row-odd"><td><p>VASPKIT 暂存或部分发布失败</p></td>
+<td><p>故障注入覆盖</p></td>
+<td><p>全部校验数据先在 Case 同盘暂存，再以 hard link 无覆盖发布；回滚前检查归属和内容，检测到外部变化或回滚失败时明确报路径</p></td>
+</tr>
+<tr class="row-even"><td><p>四行规则 KPOINTS</p></td>
+<td><p>通过</p></td>
+<td><p>Gamma/Monkhorst-Pack 网格的偏移行可省略，默认零偏移；显式非法偏移被拒绝</p></td>
+</tr>
+<tr class="row-odd"><td><p>KSPACING-only、无 KPOINTS</p></td>
+<td><p>通过</p></td>
+<td><p>有限正数 KSPACING、可选 KGAMMA；初始化、中性/带电准备、快照和提交前检查均支持；包括 D 指数、非法值与原有 KPOINTS 优先级测试</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">inputs</span></code> / <code class="docutils literal notranslate"><span class="pre">init</span> <span class="pre">--yes</span></code> 自动补全</p></td>
+<td><p>通过</p></td>
+<td><p>显式 mesh，或 VASPKIT 1.5.x 的 103/102；缺参数一次报出，不猜测赝势；native 可不依赖 VASPKIT</p></td>
+</tr>
+<tr class="row-odd"><td><p>保存输入配置并复用</p></td>
+<td><p>通过</p></td>
+<td><p>显式 --save-settings 或交互补全时确认保存，默认 XDG_CONFIG_HOME；复用库/映射/密度设置，不跨体系复用显式网格</p></td>
+</tr>
+<tr class="row-even"><td><p>菜单首次补全、取消与重试</p></td>
+<td><p>通过</p></td>
+<td><p>14/02 提供保存询问，默认不保存；取消不写输入/配置；错误提示可重新选择补全，再进入初始化</p></td>
+</tr>
+<tr class="row-odd"><td><p>自动分配在不同分区的服务器上使用</p></td>
+<td><p>假程序通过</p></td>
+<td><p>可选择本机分区，不要求存在 compute；空列表/查询失败/无效分区可取消且原配置不变；自动分配不绑定节点</p></td>
+</tr>
+<tr class="row-even"><td><p>无 TTY 缺参数、stdin 保持打开</p></td>
+<td><p>通过</p></td>
+<td><p>init 缺基础必填项和 configure-reference 缺参考值时立即报错；完整批处理应显式 --yes，不以开放管道代替交互终端</p></td>
+</tr>
+<tr class="row-odd"><td><p>菜单 14 / inputs / next</p></td>
+<td><p>通过</p></td>
+<td><p>统一补全入口；next 一次执行一个动作，dry-run 不查询队列；写入和提交保留确认</p></td>
+</tr>
+<tr class="row-even"><td><p>内置 SLURM 提交与状态查询</p></td>
+<td><p>假程序通过</p></td>
+<td><p>不代表账户/分区、控制器、MPI、模块或真实作业已验证</p></td>
+</tr>
+<tr class="row-odd"><td><p>内置 PBS</p></td>
+<td><p>不支持</p></td>
+<td><p>旧 PBS 配置不自动迁移；custom 包装器须自行实现、验证和维护</p></td>
+</tr>
+<tr class="row-even"><td><p>原生 Windows、macOS、多用户共享写同一 Case</p></td>
+<td><p>本轮未验收</p></td>
+<td><p>核心使用 POSIX <code class="docutils literal notranslate"><span class="pre">fcntl</span></code> 锁，原生 Windows 不是当前支持目标；隔离 HOME 测试不等于多账户权限测试</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="id4">
+<h2>使用边界<a class="headerlink" href="#id4" title="Link to this heading"></a></h2>
+<section id="id5">
+<h3>安装与版本来源<a class="headerlink" href="#id5" title="Link to this heading"></a></h3>
+<p>在独立 Case 目录检查当前 Python 实际导入的包：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-c<span class="w"> </span><span class="s1">'import vaspsolkit; print(vaspsolkit.__version__, vaspsolkit.__file__)'</span>
+</pre></div>
+</div>
+<p>旧源码目录或残留 <code class="docutils literal notranslate"><span class="pre">PYTHONPATH</span></code> 会遮蔽新安装，尤其是 <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">-m</span> <span class="pre">vaspsolkit</span></code>；先更换工作目录、
+清理旧路径并确认虚拟环境，再解释旧菜单或 PBS 提示。版本号同为 <code class="docutils literal notranslate"><span class="pre">0.4.0</span></code> 也不能单独证明
+导入了当前未发布修订，必须核对文件来源。</p>
+<p>离线构建使用 <code class="docutils literal notranslate"><span class="pre">--no-build-isolation</span></code> 时，调用环境必须已具备 <code class="docutils literal notranslate"><span class="pre">setuptools&gt;=68</span></code> 和 <code class="docutils literal notranslate"><span class="pre">wheel</span></code>。
+不能仅依据 pip 返回 0 判断 wheel 正确：过旧构建工具可能产生 <code class="docutils literal notranslate"><span class="pre">UNKNOWN-0.0.0</span></code>。安装测试
+因此检查产物元数据和实际安装来源。<code class="docutils literal notranslate"><span class="pre">--no-deps</span></code> 不会替用户补齐 matplotlib 等依赖。</p>
+</section>
+<section id="id6">
+<h3>输入与脚本<a class="headerlink" href="#id6" title="Link to this heading"></a></h3>
+<p>使用 VASP5 元素行的 POSCAR，并自行确认 POTCAR 类型、顺序和许可证。ENMAX 建议不等于
+ENCUT 已做收敛测试；保留已有 INCAR 的初始化路径不会自动填写缺失 ENCUT。</p>
+<p>CLI 通用初始化分支拒绝替换 symlink INCAR；请先将模板复制为 Case 内的普通文件，避免
+失败恢复破坏链接语义。Case 规划还限制指向 Case 外部的输入或脚本链接，不能把模板链接
+方案视为所有初始化入口通用支持。</p>
+<p>将脚本放在 Case 内，使用 <code class="docutils literal notranslate"><span class="pre">vasp.slurm</span></code> 等简单文件名。本轮验证的是目录路径含空格，不能
+推断绝对脚本路径、向 Case 外的链接或任意复杂脚本都支持。初始化不自动导入脚本里的
+资源：默认 compute / 1 节点 / 96 tasks / 72:00:00 会在提交时显式传入，可能覆盖 <code class="docutils literal notranslate"><span class="pre">#SBATCH</span></code>
+头。脚本文本保留不等于最终资源请求不变；受管理 profile 的 launcher 仍限 <code class="docutils literal notranslate"><span class="pre">mpirun</span> <span class="pre">+</span> <span class="pre">vasp_std</span></code>。</p>
+<p>自动补全默认使用原生后端；可选 VASPKIT 1.5.x。已对本机 1.5.0 执行只生成 POTCAR、
+只生成 KPOINTS、同时生成两者的临时冒烟测试，使用合成解析数据，<strong>不是合法赝势库的
+科学计算验收</strong>。其他错误路径使用假外部程序覆盖。不同版本目前明确拒绝自动任务，
+应使用 native 后端或用户提供的输入。</p>
+<p>临时运行只提供结构和相关输入，不传提交脚本；隔离 HOME、显式关闭自动提交、固定允许
+任务 103/102，并设 120 秒超时。赝势映射先从用户授权的库校验，再构造临时选择目录，
+不修改用户的 ~/.vaspkit。不默认采用工具自己的推荐赝势，输出还须通过顺序、变体和
+泛函检查，并与确认库的有序拼接逐字节一致；工具改动临时 POSCAR 时拒绝导入。
+活动任务、损坏或未决提交回执均阻止补全，发布前会再次检查。保存的赝势库统一为绝对路径，
+避免换目录后误选同名不同版本的库。已存在输入不会被替换。补全成功后再取消初始化不删除已确认生成的文件；
+可复用配置保存是后续独立步骤，保存失败会提示输入已完成，不能误认为整项操作未执行。</p>
+<p>VASPKIT 导入在 Case 所在文件系统暂存全部已校验数据，再通过 hard link 逐一发布，已有
+同名文件不会被覆盖；目标文件系统须支持 hard link。暂存失败不发布输入；发布途中失败时，
+仅撤销检查时仍属于本次导入、且内容未改变的文件。检查时检测到的外部替换或原位改动
+会被保留，并报告需人工检查的具体路径。锁是协作式锁，不能隔离不遵守锁的其他程序；
+不要同时用编辑器或其他脚本修改正在初始化、导入或回滚的同一 Case。</p>
+<p>初始化与输入导入的回滚只针对程序能捕获并处理的异常。CLI 通用初始化分支对 INCAR 使用
+原子写入，后续失败时尝试恢复本次已写文件；内容不再匹配或恢复操作失败时报告
+<code class="docutils literal notranslate"><span class="pre">rollback</span> <span class="pre">needs</span> <span class="pre">manual</span> <span class="pre">review</span></code>。默认 Slurm 初始化也会先暂存原始字节和权限，发布失败时
+尝试恢复；检测到变化或无法恢复时报告 <code class="docutils literal notranslate"><span class="pre">rollback</span> <span class="pre">incomplete</span></code> 及保留的备份路径。
+此时应先核对所列文件再决定如何重试。<strong>逐文件原子写入、
+无覆盖发布和异常回滚均不等于跨文件、跨进程的 crash transaction</strong>：进程被强制终止、
+系统崩溃或断电后不保证自动恢复全部文件，也不保证整个初始化全成或全败。</p>
+</section>
+<section id="id7">
+<h3>离线与恢复<a class="headerlink" href="#id7" title="Link to this heading"></a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">plan</span> <span class="pre">--offline</span></code> 不查询队列，显示的计划不是集群就绪证明；一般 <code class="docutils literal notranslate"><span class="pre">plan</span></code>、<code class="docutils literal notranslate"><span class="pre">status</span></code>、<code class="docutils literal notranslate"><span class="pre">monitor</span></code>
+可能调用调度器。<code class="docutils literal notranslate"><span class="pre">--yes</span></code> 是跳过确认并允许写入/提交，不是预览；只有带 <code class="docutils literal notranslate"><span class="pre">--dry-run</span></code> 的对应
+提交命令才是不提交路径，也不等于真实资源验收。</p>
+<p>已存在 <code class="docutils literal notranslate"><span class="pre">vaspsolkit.json</span></code> 或 <code class="docutils literal notranslate"><span class="pre">vaspsolkit.state.json</span></code> 时应使用 status/menu 和配置命令续跑，
+不要删除状态以绕过 init 保护。Case 状态和用户级 submission receipt 都参与恢复；活动状态
+默认在 <code class="docutils literal notranslate"><span class="pre">${XDG_STATE_HOME:-~/.local/state}/vaspsolkit/cases</span></code>，可通过 <code class="docutils literal notranslate"><span class="pre">VASPSOLKIT_STATE_ROOT</span></code>
+设置。迁移到新账户或新路径不是经过验证的自动恢复方案，须先核对真实 Job ID 和未决回执，
+不能仅复制配置后直接重提。</p>
+<p>调度器完成与 VASP 收敛是独立判定。本轮假任务不生成有效 OUTCAR/CHGCAR/LOCPOT，不能
+据此声称完整五点扫描或 E-U 科学工作流已在新服务器验收。科学边界见
+<a class="reference internal" href="SCIENTIFIC_CONVENTIONS.html"><span class="std std-doc">计算约定</span></a>，真实集群适配见<a class="reference internal" href="CLUSTER_CONFIGURATION.html"><span class="std std-doc">集群配置</span></a>。</p>
+</section>
+</section>
+<section id="id8">
+<h2>复现实测<a class="headerlink" href="#id8" title="Link to this heading"></a></h2>
+<p>在当前源码根目录、具备开发依赖及上述构建工具的环境中执行：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span>-q<span class="w"> </span>tests/test_documented_workflows.py<span class="w"> </span>tests/test_documentation_examples.py
+python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span>-q<span class="w"> </span>tests/test_input_portability.py<span class="w"> </span>tests/test_scheduler_portability.py
+python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span>-q<span class="w"> </span>tests/test_kspacing_workflow.py<span class="w"> </span>tests/test_input_completion.py<span class="w"> </span>tests/test_quick_commands.py
+python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span>-q
+</pre></div>
+</div>
+<p>测试自行隔离状态目录，不需要全局设置 <code class="docutils literal notranslate"><span class="pre">VASPSOLKIT_STATE_ROOT</span></code>，也不需要任何集群命令。
+安装测试从当前工作树复制必要包文件到临时目录构建，排除源码路径注入后安装和运行，
+不使用只打包已提交 HEAD 的维护者发布脚本。</p>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="页脚">
+        <a href="commands.html" class="btn btn-neutral float-left" title="菜单与命令查询" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> 上一页</a>
+        <a href="USER_GUIDE.html" class="btn btn-neutral float-right" title="使用手册" accesskey="n" rel="next">下一页 <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; 版权所有 2026, VASPsolKit contributors。</p>
+  </div>
+
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

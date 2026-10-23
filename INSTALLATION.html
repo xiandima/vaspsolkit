@@ -1,0 +1,218 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="zh-CN" data-content_root="./">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>安装与升级 &mdash; VASPsolKit 用户手册</title>
+      <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="_static/css/theme.css?v=9edc463e" />
+      <link rel="stylesheet" type="text/css" href="_static/copybutton.css?v=76b2166b" />
+      <link rel="stylesheet" type="text/css" href="_static/manual.css?v=2d1a1fb2" />
+
+  
+    <link rel="canonical" href="https://xiandima.github.io/vaspsolkit/INSTALLATION.html" />
+      <script src="_static/jquery.js?v=5d32c60e"></script>
+      <script src="_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="_static/documentation_options.js?v=b13c26e8"></script>
+      <script src="_static/doctools.js?v=9bcbadda"></script>
+      <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+      <script src="_static/clipboard.min.js?v=a7894cd8"></script>
+      <script src="_static/copybutton.js?v=7654a337"></script>
+      <script src="_static/translations.js?v=beaddf03"></script>
+    <script src="_static/js/theme.js"></script>
+    <link rel="index" title="索引" href="genindex.html" />
+    <link rel="search" title="搜索" href="search.html" />
+    <link rel="next" title="准备输入与 VASPKIT" href="inputs.html" />
+    <link rel="prev" title="第一次计算" href="quickstart.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search"  style="background: #176d72" >
+
+          
+          
+          <a href="index.html" class="icon icon-home">
+            VASPsolKit
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="搜索文档" aria-label="搜索文档" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="导航菜单">
+              <p class="caption" role="heading"><span class="caption-text">开始使用</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="quickstart.html">第一次计算</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">安装与升级</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#id2">服务器可联网</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id3">服务器不能联网</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id4">升级</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id5">命令或版本不对</a></li>
+</ul>
+</li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">计算流程</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="inputs.html">准备输入与 VASPKIT</a></li>
+<li class="toctree-l1"><a class="reference internal" href="CLUSTER_CONFIGURATION.html">服务器适配</a></li>
+<li class="toctree-l1"><a class="reference internal" href="workflow.html">中性计算与五点扫描</a></li>
+<li class="toctree-l1"><a class="reference internal" href="recovery.html">检查与恢复</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">结果与方法</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="results.html">E-U 结果与示例</a></li>
+<li class="toctree-l1"><a class="reference internal" href="reaction.html">吸附能与反应分析</a></li>
+<li class="toctree-l1"><a class="reference internal" href="SCIENTIFIC_CONVENTIONS.html">计算与后处理约定</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">查询与参考</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="commands.html">菜单与命令查询</a></li>
+<li class="toctree-l1"><a class="reference internal" href="COMPATIBILITY.html">实测兼容性与限制</a></li>
+<li class="toctree-l1"><a class="reference internal" href="USER_GUIDE.html">使用手册</a></li>
+<li class="toctree-l1"><a class="reference internal" href="versions.html">版本说明</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="移动版导航菜单"  style="background: #176d72" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="index.html">VASPsolKit</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="页面导航">
+  <ul class="wy-breadcrumbs">
+      <li><a href="index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">安装与升级</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="id1">
+<h1>安装与升级<a class="headerlink" href="#id1" title="Link to this heading"></a></h1>
+<p><a class="reference internal" href="index.html"><span class="std std-doc">手册首页</span></a> · <a class="reference internal" href="COMPATIBILITY.html"><span class="std std-doc">兼容性说明</span></a></p>
+<section id="id2">
+<h2>服务器可联网<a class="headerlink" href="#id2" title="Link to this heading"></a></h2>
+<p>需要 Python &gt;=3.9，建议 Linux 登录节点上的独立 Python 环境。VASP 和 VASPKIT 不由 pip 安装；
+先让本机脚本能在集群中正确加载它们。</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/xiandima/vaspsolkit.git
+<span class="nb">cd</span><span class="w"> </span>vaspsolkit
+python<span class="w"> </span>-m<span class="w"> </span>venv<span class="w"> </span><span class="s2">"</span><span class="nv">$HOME</span><span class="s2">/.venvs/vaspsolkit"</span>
+<span class="nb">source</span><span class="w"> </span><span class="s2">"</span><span class="nv">$HOME</span><span class="s2">/.venvs/vaspsolkit/bin/activate"</span>
+python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>.
+vaspsolkit<span class="w"> </span>--help
+</pre></div>
+</div>
+<p>下载源码压缩包的用户，解压后从 <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">-m</span> <span class="pre">venv</span></code> 开始。已经建立环境时只需激活。
+安装到自己的环境，不需要管理员权限，也不修改系统 Python。</p>
+<p>如果服务器不提供 venv，可使用已有的独立 Conda 环境（需 Python &gt;=3.9），激活后执行
+<code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">-m</span> <span class="pre">pip</span> <span class="pre">install</span> <span class="pre">.</span></code>。不要混用另一个环境的 pip 和 python。</p>
+</section>
+<section id="id3">
+<h2>服务器不能联网<a class="headerlink" href="#id3" title="Link to this heading"></a></h2>
+<p>在<strong>与目标集群的操作系统、CPU 架构和 Python 版本兼容</strong>的联网环境中，进入源码根目录：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"setuptools&gt;=68"</span><span class="w"> </span>wheel
+python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>wheel<span class="w"> </span>--no-deps<span class="w"> </span>--no-build-isolation<span class="w"> </span>--wheel-dir<span class="w"> </span>/tmp/vaspsolkit-wheelhouse<span class="w"> </span>.
+python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>download<span class="w"> </span>--dest<span class="w"> </span>/tmp/vaspsolkit-wheelhouse<span class="w"> </span>/tmp/vaspsolkit-wheelhouse/vaspsolkit-*.whl
+</pre></div>
+</div>
+<p>将整个 <code class="docutils literal notranslate"><span class="pre">vaspsolkit-wheelhouse</span></code> 目录传到集群，激活自己的 Python 环境后安装：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>--no-index<span class="w"> </span>--find-links<span class="w"> </span><span class="s2">"/path/to/vaspsolkit-wheelhouse"</span><span class="w"> </span>vaspsolkit
+vaspsolkit<span class="w"> </span>--help
+</pre></div>
+</div>
+<p>目录里必须包含 matplotlib 等依赖，不只是 vaspsolkit 的 wheel。
+若提示找不到可用依赖，检查 Python/平台是否一致及文件是否传齐。
+<code class="docutils literal notranslate"><span class="pre">--no-deps</span></code> 不是通用的离线安装替代方案。</p>
+</section>
+<section id="id4">
+<h2>升级<a class="headerlink" href="#id4" title="Link to this heading"></a></h2>
+<p>保留原 Case 输入、输出和状态文件。不要在正在写入 Case 的另一个操作期间升级。</p>
+<p>若用 Git 下载且源码没有自己的修改：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span><span class="s2">"/path/to/vaspsolkit-source"</span>
+git<span class="w"> </span>pull<span class="w"> </span>--ff-only
+<span class="nb">source</span><span class="w"> </span><span class="s2">"</span><span class="nv">$HOME</span><span class="s2">/.venvs/vaspsolkit/bin/activate"</span>
+python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>--upgrade<span class="w"> </span>.
+</pre></div>
+</div>
+<p>有本地源码修改时，先保存自己的修改并核对差异，不要用强制重置覆盖。
+离线用户使用新准备的 wheelhouse，安装命令加 <code class="docutils literal notranslate"><span class="pre">--upgrade</span></code>。</p>
+<p>随后<strong>进入 Case 目录</strong>检查来源并查看状态：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span><span class="s2">"/path/to/my-case"</span>
+python<span class="w"> </span>-c<span class="w"> </span><span class="s1">'import vaspsolkit; print(vaspsolkit.__version__, vaspsolkit.__file__)'</span>
+vaspsolkit<span class="w"> </span>status
+</pre></div>
+</div>
+<p>版本号不能单独证明代码已更新，同一开发版也可能有不同修订。版本变化见<a class="reference internal" href="versions.html"><span class="std std-doc">版本说明</span></a>。
+已有 Case 继续使用原状态，不重新 init；旧配置的迁移见<a class="reference internal" href="USER_GUIDE.html#id15"><span class="std std-ref">使用手册</span></a>。</p>
+</section>
+<section id="id5">
+<h2>命令或版本不对<a class="headerlink" href="#id5" title="Link to this heading"></a></h2>
+<p><strong>提示 vaspsolkit: command not found</strong></p>
+<p>先激活安装时的环境，然后尝试：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>vaspsolkit<span class="w"> </span>--help
+</pre></div>
+</div>
+<p>若模块也找不到，请在该环境中重新安装，不要只改命令名称。</p>
+<p><strong>升级后仍显示 PBS 或旧菜单</strong></p>
+<p>在实际运行目录执行：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-c<span class="w"> </span><span class="s1">'import vaspsolkit; print(vaspsolkit.__version__, vaspsolkit.__file__)'</span>
+</pre></div>
+</div>
+<p>如果路径指向旧源码，先离开那个源码目录，改在独立 Case 运行；检查是否设置了指向旧目录的
+PYTHONPATH。<code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">-m</span> <span class="pre">vaspsolkit</span></code> 同样可能被当前目录的旧包遮蔽，重新安装不能消除目录遮蔽。</p>
+<p><strong>用户目录只读或需要隔离程序记录</strong></p>
+<p>指定自己可写的状态和配置目录，路径应在后续会话中保持一致：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">VASPSOLKIT_STATE_ROOT</span><span class="o">=</span><span class="s2">"/path/to/writable/vaspsolkit-state"</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">XDG_CONFIG_HOME</span><span class="o">=</span><span class="s2">"/path/to/writable/config"</span>
+</pre></div>
+</div>
+<p>Case 本身也必须可写。不要在已有活动任务时切换状态目录以绕过提交记录。
+测试过的平台及文件系统要求见<a class="reference internal" href="COMPATIBILITY.html"><span class="std std-doc">兼容性说明</span></a>。</p>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="页脚">
+        <a href="quickstart.html" class="btn btn-neutral float-left" title="第一次计算" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> 上一页</a>
+        <a href="inputs.html" class="btn btn-neutral float-right" title="准备输入与 VASPKIT" accesskey="n" rel="next">下一页 <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; 版权所有 2026, VASPsolKit contributors。</p>
+  </div>
+
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

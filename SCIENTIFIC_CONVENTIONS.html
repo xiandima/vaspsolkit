@@ -1,0 +1,313 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="zh-CN" data-content_root="./">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>计算与后处理约定 &mdash; VASPsolKit 用户手册</title>
+      <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="_static/css/theme.css?v=9edc463e" />
+      <link rel="stylesheet" type="text/css" href="_static/copybutton.css?v=76b2166b" />
+      <link rel="stylesheet" type="text/css" href="_static/manual.css?v=2d1a1fb2" />
+
+  
+    <link rel="canonical" href="https://xiandima.github.io/vaspsolkit/SCIENTIFIC_CONVENTIONS.html" />
+      <script src="_static/jquery.js?v=5d32c60e"></script>
+      <script src="_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="_static/documentation_options.js?v=b13c26e8"></script>
+      <script src="_static/doctools.js?v=9bcbadda"></script>
+      <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+      <script src="_static/clipboard.min.js?v=a7894cd8"></script>
+      <script src="_static/copybutton.js?v=7654a337"></script>
+      <script src="_static/translations.js?v=beaddf03"></script>
+    <script src="_static/js/theme.js"></script>
+    <link rel="index" title="索引" href="genindex.html" />
+    <link rel="search" title="搜索" href="search.html" />
+    <link rel="next" title="菜单与命令查询" href="commands.html" />
+    <link rel="prev" title="吸附能与反应分析" href="reaction.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search"  style="background: #176d72" >
+
+          
+          
+          <a href="index.html" class="icon icon-home">
+            VASPsolKit
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="搜索文档" aria-label="搜索文档" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="导航菜单">
+              <p class="caption" role="heading"><span class="caption-text">开始使用</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="quickstart.html">第一次计算</a></li>
+<li class="toctree-l1"><a class="reference internal" href="INSTALLATION.html">安装与升级</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">计算流程</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="inputs.html">准备输入与 VASPKIT</a></li>
+<li class="toctree-l1"><a class="reference internal" href="CLUSTER_CONFIGURATION.html">服务器适配</a></li>
+<li class="toctree-l1"><a class="reference internal" href="workflow.html">中性计算与五点扫描</a></li>
+<li class="toctree-l1"><a class="reference internal" href="recovery.html">检查与恢复</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">结果与方法</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="results.html">E-U 结果与示例</a></li>
+<li class="toctree-l1"><a class="reference internal" href="reaction.html">吸附能与反应分析</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">计算与后处理约定</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#id2">实际数据链</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#vaspsol">VASPsol 版本与对齐</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#she">SHE 与方法记录</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#u-vertex-pzc">U_vertex 与 PZC</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id3">五点验收</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#incar-profile">INCAR profile 行为</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id4">反应层边界</a></li>
+</ul>
+</li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">查询与参考</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="commands.html">菜单与命令查询</a></li>
+<li class="toctree-l1"><a class="reference internal" href="COMPATIBILITY.html">实测兼容性与限制</a></li>
+<li class="toctree-l1"><a class="reference internal" href="USER_GUIDE.html">使用手册</a></li>
+<li class="toctree-l1"><a class="reference internal" href="versions.html">版本说明</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="移动版导航菜单"  style="background: #176d72" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="index.html">VASPsolKit</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="页面导航">
+  <ul class="wy-breadcrumbs">
+      <li><a href="index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">计算与后处理约定</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="id1">
+<h1>计算与后处理约定<a class="headerlink" href="#id1" title="Link to this heading"></a></h1>
+<p>本页区分代码实际执行的处理、自动检查和人工科学验收。高 R2、文件存在或队列结束都不能
+代替物理有效性验证。当前公共包不运行直接恒电势电子数控制，也不自动适配所有 VASPsol 版本。</p>
+<section id="id2">
+<h2>实际数据链<a class="headerlink" href="#id2" title="Link to this heading"></a></h2>
+<p>实现入口：<a class="reference download internal" download="" href="_downloads/24a7b2e7b97c2ac79f00c44f4207f975/workflow.py"><span class="xref download myst">workflow.py</span></a>、<a class="reference download internal" download="" href="_downloads/2afb8a701b9c067e061614e784a7a077/analysis.py"><span class="xref download myst">analysis.py</span></a>、
+<a class="reference download internal" download="" href="_downloads/c87b2b74a746c366a613c57eb3563b03/postprocess.py"><span class="xref download myst">postprocess.py</span></a>。内置收集器使用：</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>delta_electrons  = NELECT - NELECT_reference
+electrode_charge_e = -delta_electrons
+V_ref           = max(planar_average(neutral_LOCPOT, axis=z))
+U_vs_SHE        = V_ref - E_Fermi - E_abs(SHE)
+E(U)            = TOTEN - delta_electrons * E_Fermi
+</pre></div>
+</div>
+<p>正 <code class="docutils literal notranslate"><span class="pre">delta_electrons</span></code> 表示加电子，不是正电极电荷。NELECT、TOTEN、E_Fermi 来自各点 OUTCAR。
+中性参考优先取电子数匹配的根目录输出，否则寻找中性扫描点的 LOCPOT。默认五点中的
+目录 <code class="docutils literal notranslate"><span class="pre">3</span></code> 是另一次扫描计算，不是把根目录中性结果重复列入拟合。</p>
+<p><strong>程序取平面平均电势的最大值，没有自动识别真空平台、选择上下表面、检查真空厚度或
+排除原子区域峰值。</strong> <code class="docutils literal notranslate"><span class="pre">V_ref</span></code> 只有在人工确认后才可以解释为该方法所需的参考能级。
+VASP 官方功函数定义为真空平台与费米能级之差，强调平台和足够的真空区，不能仅凭最大值
+断言功函数可靠。<a class="reference external" href="https://www.vasp.at/wiki/index.php/Computing_the_work_function">VASP work-function 文档</a></p>
+<p>内置 collect 不调用 VASPKIT，也不逐点独立提取真空平台。VASPKIT 可以用于独立复核，但
+得到不同数值时须先核对 LOCPOT 的势类型、平面平均方向、平台选择和能量零点。</p>
+<p>上述 E(U) 是当前实现的项目处理约定，不是对任意 VASP 输出都成立的通用转换。
+<code class="docutils literal notranslate"><span class="pre">TOTEN</span></code> 含电子展宽相关自由能项及所用模型贡献，不是自动得到的完整 Gibbs 自由能；程序
+不添加振动 ZPE、气相平动/转动熵、温度/压力/标准态等修正。若改用 E0 或其他能量列，
+应重新明确转换公式及 provenance，不能只改图的纵轴名称。</p>
+</section>
+<section id="vaspsol">
+<h2>VASPsol 版本与对齐<a class="headerlink" href="#vaspsol" title="Link to this heading"></a></h2>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>分支</p></th>
+<th class="head"><p>原始资料中的处理</p></th>
+<th class="head"><p>当前包边界</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>原始 VASPsol 电解质工作流</p></td>
+<td><p>某些补丁提供 FERMI_SHIFT，用于费米能级/电解质参考对齐，并要求一致的能量修正</p></td>
+<td><p>不读取也不应用该量</p></td>
+</tr>
+<tr class="row-odd"><td><p>VASPsol++ 固定电子数</p></td>
+<td><p>有离子屏蔽时按其输出约定对齐，不能再机械添加原始 VASPsol 的修正</p></td>
+<td><p>未实现自动版本识别与专用转换</p></td>
+</tr>
+<tr class="row-even"><td><p>VASPsol++ 直接恒电势</p></td>
+<td><p>输出可已是 grand potential，不能重复做电子库项变换</p></td>
+<td><p>不属于当前固定 NELECT 扫描后处理分支</p></td>
+</tr>
+</tbody>
+</table>
+<p>原始版本的对齐规则见 <a class="reference external" href="https://github.com/henniggroup/VASPsol/blob/master/docs/USAGE.md">VASPsol USAGE</a>；
+新版输出与恒电势约定见 <a class="reference external" href="https://github.com/VASPsol/VASPsol#output">VASPsol++ output</a>。
+使用前核对实际源码版本、补丁和输出，不能仅凭目录名或 <code class="docutils literal notranslate"><span class="pre">LSOL</span></code> 判别分支。</p>
+<p>当前 <code class="docutils literal notranslate"><span class="pre">postprocess</span></code> 根据列名固定写入 <code class="docutils literal notranslate"><span class="pre">vacuum-reference-vs-she</span></code>、
+<code class="docutils literal notranslate"><span class="pre">toten-minus-delta-electrons-times-efermi</span></code>（或 <code class="docutils literal notranslate"><span class="pre">raw-toten</span></code>）和 <code class="docutils literal notranslate"><span class="pre">fermi_shift_handling=not-applied</span></code>。
+<strong>不能把外部校正后的数据塞入同名 CSV 列，就认为这些标签真实。</strong> 目前没有通用的外部
+能量/电势 convention 导入接口；此类数据须保留独立处理脚本、公式和真实元数据，不能冒充
+默认分支已经通过验证。本轮仅修正文档与报告，不声称补齐了这些物理方法。</p>
+</section>
+<section id="she">
+<h2>SHE 与方法记录<a class="headerlink" href="#she" title="Link to this heading"></a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">workflow.she_reference</span></code> 表示所选绝对 SHE 标定值；默认 4.70 只是项目起始值，不是
+适用于所有泛函和溶剂模型的普适常数。SHE 标定需要匹配实际模型，参阅
+<a class="reference external" href="https://github.com/VASPsol/VASPsol#recommended-incar-for-an-aqueous-electrolyte">VASPsol++ SHE calibration</a>。
+报告数值外，还应记录来源、模型、参考零点、SHE/RHE 定义以及需要时的 pH 转换。
+程序确认数值不等于验证了来源；来源字符串可留空，reaction 也不比较来源文本。</p>
+<p><code class="docutils literal notranslate"><span class="pre">workflow.method_fingerprint</span></code> 是<strong>人工填写并由程序比较的字符串</strong>，不是从 INCAR、
+KPOINTS、POTCAR 或可执行文件计算的哈希。相同标识不能证明实际参数相同。建议在 Case
+旁保留方法记录，并让此字段引用其稳定 ID，至少核对：</p>
+<ul class="simple">
+<li><p>VASP/VASPsol 版本与补丁，固定电子数还是直接恒电势分支。</p></li>
+<li><p>泛函、赝势版本与各元素种类（不公开 POTCAR 内容）、ENCUT、k 点与晶胞策略。</p></li>
+<li><p>smearing、电子收敛、离子优化策略、固定原子、ISPIN/MAGMOM 和最终磁态。</p></li>
+<li><p>色散、偶极修正、溶剂/电解质参数与势的输出类型。</p></li>
+<li><p>电荷符号、能量转换、参考能级、SHE 标定及自由能修正来源。</p></li>
+</ul>
+<p>不同吸附组成无需 POSCAR 或整个 POTCAR 文件逐字相同，但共同元素赝势、基底/晶胞及数值
+方法必须可比较。<code class="docutils literal notranslate"><span class="pre">summary_sha256</span></code> 只证明汇总文件版本，不证明上述物理一致性。</p>
+</section>
+<section id="u-vertex-pzc">
+<h2>U_vertex 与 PZC<a class="headerlink" href="#u-vertex-pzc" title="Link to this heading"></a></h2>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>E(U) = a U^2 + b U + c
+U_vertex = -b / (2a)
+q(U) = m U + n
+pzc_estimate = -n / m
+</pre></div>
+</div>
+<p>二次顶点 <code class="docutils literal notranslate"><span class="pre">U_vertex</span></code> 不是自动验证的 PZC。兼容字段 <code class="docutils literal notranslate"><span class="pre">u0</span></code> 仍指同一顶点，<code class="docutils literal notranslate"><span class="pre">pzc</span></code> 不再
+无条件赋值。有电极电荷数据时，程序另行线性拟合 q(U)，报告零点及是否落在拟合区间。
+该电荷来自相对 <code class="docutils literal notranslate"><span class="pre">NELECT_reference</span></code> 的差值；只有参考确实电中性且响应分支适用时，才有
+物理 PZC 的意义。零点估计不是独立实验校准，也没有自动的线性质量/磁态连续性验收。</p>
+<p>曲率导出的 <code class="docutils literal notranslate"><span class="pre">-2a</span></code> 只有在合适的能量约定和电容模型下才有电容含义；它不是已经完成界面数、
+面积和单位换算的面积比电容，不能直接当成微法每平方厘米。</p>
+</section>
+<section id="id3">
+<h2>五点验收<a class="headerlink" href="#id3" title="Link to this heading"></a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">postprocess</span></code> 自动要求原始数据恰有五点、恰有一个 <code class="docutils literal notranslate"><span class="pre">delta_electrons=0</span></code>，且默认全部纳入。
+显式 <code class="docutils literal notranslate"><span class="pre">--allow-excluded</span></code> 是诊断性豁免，图例显示纳入数/原始数和排除目录，报告保留记录；
+它不满足“五点含中性”的最终验收。低层 <code class="docutils literal notranslate"><span class="pre">analyze</span></code> 不提供同一保护。</p>
+<p><code class="docutils literal notranslate"><span class="pre">postprocess</span></code> 只读 CSV，不重查 OUTCAR，缺失 <code class="docutils literal notranslate"><span class="pre">converged/fit_included</span></code> 标志可能按默认值纳入。
+应先运行 collect 和 audit，再确认实际正常结束、电子/离子收敛以及输出完整性。
+以下仍是人工验收，不要写成全部自动实现：</p>
+<ul class="simple">
+<li><p>U 随电荷变化是否单调，目标电势是否由实际点覆盖。</p></li>
+<li><p>各点是否保持可比较的构型、磁态和电子分支；逐点优化可产生真实结构差异。</p></li>
+<li><p>中性点的能量/势零点、参考文件和初猜是否与其他点一致；不能仅凭 R2 归因于 WAVECAR。</p></li>
+<li><p>查看每个原始点、残差及方法记录；三参数二次拟合中五点的高 R2 不代表充分验证。</p></li>
+</ul>
+<p><code class="docutils literal notranslate"><span class="pre">analysis.json.fit_domain</span></code> 描述实际参与拟合的 U 区间。当前 E-U 图两端额外延伸用于显示，
+曲线 CSV 也在拟合点区间两侧各扩展 20%；图像绘制范围不是采样范围，外推不增加计算点。
+<code class="docutils literal notranslate"><span class="pre">eu_curve.csv</span></code> 为派生数据，原始点应从 summary.csv 和 analysis.json 复查。</p>
+</section>
+<section id="incar-profile">
+<h2>INCAR profile 行为<a class="headerlink" href="#incar-profile" title="Link to this heading"></a></h2>
+<p>实现见 <a class="reference download internal" download="" href="_downloads/e0c241c169f05373363bdcd06e9c9144/inputs.py"><span class="xref download myst">inputs.py</span></a>。以下为代码默认值，不是跨体系推荐方法：</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>类别</p></th>
+<th class="head"><p>行为</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>通用缺省补充</p></td>
+<td><p>PREC=Accurate、EDIFF=1E-5、NELM=300、ALGO=Fast、ISMEAR=0、SIGMA=0.05、LREAL=Auto、LASPH=.TRUE.、ISYM=0</p></td>
+</tr>
+<tr class="row-odd"><td><p>relax profile 覆盖</p></td>
+<td><p>IBRION=2、NSW=200、POTIM=0.2、ISIF=2、EDIFFG=-0.05</p></td>
+</tr>
+<tr class="row-even"><td><p>static profile 覆盖</p></td>
+<td><p>IBRION=-1、NSW=0</p></td>
+</tr>
+<tr class="row-odd"><td><p>VASPsol profile 覆盖</p></td>
+<td><p>LSOL=.TRUE.、ISOL=1、EB_K=80、TAU=0、LAMBDA_D_K=3.0、LVHAR=.TRUE.、LCHARG=.TRUE.</p></td>
+</tr>
+<tr class="row-even"><td><p>缺失 ENCUT 建议</p></td>
+<td><p>1.3 × 最大 ENMAX，向上取到 5 eV 的倍数，不替代收敛测试</p></td>
+</tr>
+</tbody>
+</table>
+<p><code class="docutils literal notranslate"><span class="pre">vaspsol-neutral-relax</span></code> 与 <code class="docutils literal notranslate"><span class="pre">vaspsol-charge-relax</span></code> 还关闭 LWAVE，分别采用中性全新密度和
+CHGCAR-only 初猜。显式 profile 会覆盖 profile 标签；通用缺省仅补缺；<code class="docutils literal notranslate"><span class="pre">--set</span></code> 最后应用。
+保留已有 INCAR 的初始化分支不等于应用整个 profile，且可能因必要溶剂标签冲突而拒绝。
+不同溶剂模型（尤其 ISOL/离子屏蔽）不能未经检查就套入此路径。默认 TAU=0 等选择影响
+物理项，不能描述成“所有体系推荐值”。</p>
+</section>
+<section id="id4">
+<h2>反应层边界<a class="headerlink" href="#id4" title="Link to this heading"></a></h2>
+<p>默认比较 <code class="docutils literal notranslate"><span class="pre">she_reference_eV</span></code>、<code class="docutils literal notranslate"><span class="pre">potential_convention</span></code>、<code class="docutils literal notranslate"><span class="pre">energy_convention</span></code>、
+<code class="docutils literal notranslate"><span class="pre">fermi_shift_handling</span></code>、<code class="docutils literal notranslate"><span class="pre">method_fingerprint</span></code>，并要求请求网格位于所有体系共同 fit_domain。
+它不校验实际计算文件、来源文献、气相常数、化学计量或单位。</p>
+<p>Reaction Spec 使用受限 AST；允许 E、数值、常数、U 及基本四则运算，不执行任意 Python。
+建议始终使用 <code class="docutils literal notranslate"><span class="pre">E(&quot;system&quot;,</span> <span class="pre">U)</span></code>，在 E 外组合系数和常数。当前解析器也接受 E 的电势参数
+表达式，但范围保护检查的是请求 U 网格，<strong>不会传播检查 <code class="docutils literal notranslate"><span class="pre">E(&quot;system&quot;,</span> <span class="pre">U+10)</span></code> 等变换后的
+实际取值范围</strong>。不要用它绕过共同区间要求。</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="nt">"compatibility"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"allow_unknown_provenance"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"allow_mixed_provenance"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"allow_extrapolation"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>这是 spec 的部分字段，三个开关分别允许缺失来源、已知约定不一致、越界外推。任一启用
+都会在报告披露；未知来源不会跳过已有的有效域检查，未知区间也不会伪造成绘图区间。
+已有区间若非有限数或顺序颠倒仍拒绝；各体系完全无公共区间时，外推开关也不放行。
+报告保存路径、元数据、常数、公式和警告，但不是全部输入文件的不可变归档。</p>
+<p>输出的 energy expression 不自动成为 Gibbs free energy。命名为 G_NO 或修改 ylabel 不会
+添加物理修正；反应式、标准态、温度/压力以及热力学或动力学含义由用户提供和验证。
+热力学曲线交点不等于反应势垒或动力学速控步骤。</p>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="页脚">
+        <a href="reaction.html" class="btn btn-neutral float-left" title="吸附能与反应分析" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> 上一页</a>
+        <a href="commands.html" class="btn btn-neutral float-right" title="菜单与命令查询" accesskey="n" rel="next">下一页 <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; 版权所有 2026, VASPsolKit contributors。</p>
+  </div>
+
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

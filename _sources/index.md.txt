@@ -1,0 +1,88 @@
+# VASPsolKit 用户手册
+
+<div class="manual-meta">0.4.0 开发版 · Linux / SLURM · 中文手册</div>
+
+> 版本提示：本手册对应 `0.4.0` 开发快照，部分功能尚未合入 GitHub `main`。安装前请核对[版本说明](versions.md)。
+
+从一个中性结构开始，完成输入准备、任务提交、五点电荷扫描和 E-U 分析。
+
+这是一份面向计算使用者的手册。你不需要预先算好中性参考，也不需要先学习整个命令列表。
+
+<div class="workflow-strip" aria-label="计算流程">
+<span><b>01</b>准备输入</span><span><b>02</b>中性计算</span><span><b>03</b>五点扫描</span><span><b>04</b>检查与分析</span>
+</div>
+
+## 从这里开始
+
+**第一次使用：** 先完成[安装](INSTALLATION.md)，再按[第一次计算](quickstart.md)走一遍。
+已有计算目录的用户，可以直接打开菜单，查看当前阶段：
+
+```bash
+cd "/path/to/my-case"
+vaspsolkit
+```
+
+输入 `02` 执行当前推荐的一步；`03` 查看完整状态；`00` 退出并保留任务记录。
+提交仍需明确确认，退出终端不会取消服务器作业。
+
+## 你现在要做什么？
+
+| 当前情况 | 对应章节 |
+| --- | --- |
+| 只有 POSCAR、INCAR 模板和本机脚本 | [准备输入与 VASPKIT](inputs.md) |
+| 换了服务器，需要重新选分区或节点 | [服务器与资源配置](CLUSTER_CONFIGURATION.md) |
+| 中性点完成，准备五点扫描 | [计算流程](workflow.md) |
+| 任务失败、状态 UNKNOWN 或提交中断 | [检查与恢复](recovery.md) |
+| 五个点算完，想看曲线和数据 | [E-U 结果与示例](results.md) |
+| 多个体系要组合成吸附能或反应曲线 | [反应分析](reaction.md) |
+
+## 计算前确认
+
+- **计算方式：** 固定 `NELECT` 扫描后建立 E-U 关系，不是运行中自动调节电子数的恒电势求解器。
+- **输入：** 每个体系一个独立目录；VASP/VASPsol、合法赝势和本机运行脚本由你提供。
+- **默认初猜：** 中性点从全新密度开始，扫描点使用中性 CHGCAR，不读取 WAVECAR。
+- **拟合：** 五点包含唯一中性点，不静默删点；结果还需审查结构、磁态和电势参考。
+
+当前为开发版文档。真实服务器环境与科学方法的验收范围见[兼容性说明](COMPATIBILITY.md)和
+[计算约定](SCIENTIFIC_CONVENTIONS.md)。
+
+```{toctree}
+:hidden:
+:caption: 开始使用
+:maxdepth: 2
+
+quickstart
+INSTALLATION
+```
+
+```{toctree}
+:hidden:
+:caption: 计算流程
+:maxdepth: 2
+
+inputs
+CLUSTER_CONFIGURATION
+workflow
+recovery
+```
+
+```{toctree}
+:hidden:
+:caption: 结果与方法
+:maxdepth: 2
+
+results
+reaction
+SCIENTIFIC_CONVENTIONS
+```
+
+```{toctree}
+:hidden:
+:caption: 查询与参考
+:maxdepth: 1
+
+commands
+COMPATIBILITY
+USER_GUIDE
+versions
+```

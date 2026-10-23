@@ -1,0 +1,12 @@
+# 版本说明
+
+本手册对应 0.4.0 开发快照，在线地址为[用户手册](https://xiandima.github.io/vaspsolkit/)。
+本次发布手册网站，不同时发布新的程序版本；部分功能尚未合入 GitHub main。
+不能仅凭相同的 0.4.0 版本字符串判断功能一致，安装后应核对菜单和 `vaspsolkit --help`。
+离线测试通过不等同于真实集群或科学方法验收。
+
+[已验证范围](COMPATIBILITY.md) · [GitHub 仓库](https://github.com/xiandima/vaspsolkit)
+
+```{include} ../CHANGELOG.md
+:start-after: '# Changelog'
+```

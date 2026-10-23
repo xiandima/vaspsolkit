@@ -1,0 +1,200 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="zh-CN" data-content_root="./">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>E-U 结果与示例 &mdash; VASPsolKit 用户手册</title>
+      <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="_static/css/theme.css?v=9edc463e" />
+      <link rel="stylesheet" type="text/css" href="_static/copybutton.css?v=76b2166b" />
+      <link rel="stylesheet" type="text/css" href="_static/manual.css?v=2d1a1fb2" />
+
+  
+    <link rel="canonical" href="https://xiandima.github.io/vaspsolkit/results.html" />
+      <script src="_static/jquery.js?v=5d32c60e"></script>
+      <script src="_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="_static/documentation_options.js?v=b13c26e8"></script>
+      <script src="_static/doctools.js?v=9bcbadda"></script>
+      <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+      <script src="_static/clipboard.min.js?v=a7894cd8"></script>
+      <script src="_static/copybutton.js?v=7654a337"></script>
+      <script src="_static/translations.js?v=beaddf03"></script>
+    <script src="_static/js/theme.js"></script>
+    <link rel="index" title="索引" href="genindex.html" />
+    <link rel="search" title="搜索" href="search.html" />
+    <link rel="next" title="吸附能与反应分析" href="reaction.html" />
+    <link rel="prev" title="检查与恢复" href="recovery.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search"  style="background: #176d72" >
+
+          
+          
+          <a href="index.html" class="icon icon-home">
+            VASPsolKit
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="搜索文档" aria-label="搜索文档" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="导航菜单">
+              <p class="caption" role="heading"><span class="caption-text">开始使用</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="quickstart.html">第一次计算</a></li>
+<li class="toctree-l1"><a class="reference internal" href="INSTALLATION.html">安装与升级</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">计算流程</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="inputs.html">准备输入与 VASPKIT</a></li>
+<li class="toctree-l1"><a class="reference internal" href="CLUSTER_CONFIGURATION.html">服务器适配</a></li>
+<li class="toctree-l1"><a class="reference internal" href="workflow.html">中性计算与五点扫描</a></li>
+<li class="toctree-l1"><a class="reference internal" href="recovery.html">检查与恢复</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">结果与方法</span></p>
+<ul class="current">
+<li class="toctree-l1 current"><a class="current reference internal" href="#">E-U 结果与示例</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#id1">输出文件</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id2">合成示例：认识一张 E-U 图</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id3">怎么判断结果是否可用</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="reaction.html">吸附能与反应分析</a></li>
+<li class="toctree-l1"><a class="reference internal" href="SCIENTIFIC_CONVENTIONS.html">计算与后处理约定</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">查询与参考</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="commands.html">菜单与命令查询</a></li>
+<li class="toctree-l1"><a class="reference internal" href="COMPATIBILITY.html">实测兼容性与限制</a></li>
+<li class="toctree-l1"><a class="reference internal" href="USER_GUIDE.html">使用手册</a></li>
+<li class="toctree-l1"><a class="reference internal" href="versions.html">版本说明</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="移动版导航菜单"  style="background: #176d72" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="index.html">VASPsolKit</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="页面导航">
+  <ul class="wy-breadcrumbs">
+      <li><a href="index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">E-U 结果与示例</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="e-u">
+<h1>E-U 结果与示例<a class="headerlink" href="#e-u" title="Link to this heading"></a></h1>
+<p>先检查数据质量，再看曲线形状。五点的高 R² 不能代替结构、磁态或能量零点的一致性检查。</p>
+<section id="id1">
+<h2>输出文件<a class="headerlink" href="#id1" title="Link to this heading"></a></h2>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>文件</p></th>
+<th class="head"><p>用途</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">results/summary.csv</span></code></p></td>
+<td><p>原始五点汇总，复查电荷、能量、电势和纳入状态</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">results/quality_report.csv</span></code></p></td>
+<td><p>audit 生成的详细质量审计</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">results/points_to_rerun.csv</span></code></p></td>
+<td><p>建议检查或重算的点</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">results/eu/eu_curve.png</span></code></p></td>
+<td><p>五点 E-U 拟合图</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">results/eu/eu_curve.csv</span></code></p></td>
+<td><p>从拟合式生成的曲线数据，不是额外计算点</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">results/eu/analysis.json</span></code></p></td>
+<td><p>原始点、二次系数、顶点、残差与来源</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">results/eu/report.md</span></code></p></td>
+<td><p>分析报告</p></td>
+</tr>
+</tbody>
+</table>
+<p><code class="docutils literal notranslate"><span class="pre">eu/</span></code> 内还有仅根据汇总表标志生成的简要质量表，不能替代根目录详细审计。
+重新分析会覆盖指定输出目录内的同名文件，需要保留旧结果时换一个输出目录。</p>
+</section>
+<section id="id2">
+<h2>合成示例：认识一张 E-U 图<a class="headerlink" href="#id2" title="Link to this heading"></a></h2>
+<p>下面的数据由解析式 <strong>E(U) = -10 - (U - 0.2)²</strong> 生成，不是 VASP 计算结果，不对应任何真实材料。
+它只用于检查后处理和展示输出，不能用于论文结论或物理参数标定。</p>
+<p><img alt="合成五点 E-U 拟合，五个点全部纳入，顶点为 0.2 V。" src="_images/example-eu.png" /></p>
+<p>图由 VASPsolKit 现有 postprocess 生成，包含五个点及唯一的零电子偏移点。
+示例故意采用精确二次数据，所以 R² 为 1；真实计算不应以“必须达到同样的 R²”为验收标准。</p>
+<p><a class="reference download internal" download="" href="_downloads/3d190dbf07cdf0fb331606917fb73dd6/example-summary.csv"><span class="xref download myst">下载合成五点 CSV</span></a></p>
+<p>安装 VASPsolKit 后，将下载的文件放到独立演示目录，运行：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>vaspsolkit<span class="w"> </span>postprocess<span class="w"> </span>--summary<span class="w"> </span>example-summary.csv<span class="w"> </span>--output<span class="w"> </span>example-eu
+</pre></div>
+</div>
+<p>这个演示只读取 CSV，不运行 VASP、不查询或提交集群任务。CSV 的 converged 标志仅为演示填写，
+不代表进行过真实收敛检查。解析式见上文，CSV 保留电荷偏移及 synthetic 方法标识。</p>
+</section>
+<section id="id3">
+<h2>怎么判断结果是否可用<a class="headerlink" href="#id3" title="Link to this heading"></a></h2>
+<ol class="arabic simple">
+<li><p>原始数据确有五点，且唯一中性点参与拟合。</p></li>
+<li><p>各点电子/离子收敛，输出完整，结构与磁态可比较。</p></li>
+<li><p>所用 VASPsol 分支、SHE 标定、能量和电势对齐一致。</p></li>
+<li><p>查看每个点的残差，不仅比较 R²；不通过删中性点追求更漂亮的曲线。</p></li>
+<li><p>关注实际取样范围；绘图延伸区间不增加物理证据。</p></li>
+</ol>
+<p>二次顶点 U_vertex 不自动等于 PZC，当前电子能量也不是自动修正好的完整 Gibbs 自由能。
+内置电势处理不自动识别真空平台，也不应用 FERMI_SHIFT。具体公式与限制见<a class="reference internal" href="SCIENTIFIC_CONVENTIONS.html"><span class="std std-doc">计算约定</span></a>。</p>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="页脚">
+        <a href="recovery.html" class="btn btn-neutral float-left" title="检查与恢复" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> 上一页</a>
+        <a href="reaction.html" class="btn btn-neutral float-right" title="吸附能与反应分析" accesskey="n" rel="next">下一页 <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; 版权所有 2026, VASPsolKit contributors。</p>
+  </div>
+
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

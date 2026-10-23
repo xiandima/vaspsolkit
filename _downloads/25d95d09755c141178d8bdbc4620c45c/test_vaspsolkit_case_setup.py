@@ -1,0 +1,627 @@
+from __future__ import annotations
+
+import dataclasses
+import json
+from pathlib import Path
+
+import pytest
+
+
+def _write_case(root: Path, *, incar: str = "ENCUT = 450\nIBRION = 1\nNSW = 88\n") -> None:
+    (root / "POSCAR").write_text(
+        "sample\n1\n1 0 0\n0 1 0\n0 0 1\nC\n1\nDirect\n0 0 0\n",
+        encoding="utf-8",
+    )
+    (root / "INCAR").write_text(incar, encoding="utf-8")
+    (root / "KPOINTS").write_text("Gamma\n0\nGamma\n1 1 1\n0 0 0\n", encoding="utf-8")
+    (root / "POTCAR").write_text(
+        "TITEL = PAW_PBE C 08Apr2002\nENMAX = 400.0 eV\n", encoding="utf-8"
+    )
+    (root / "vasp.slurm").write_text("#!/bin/sh\n", encoding="utf-8")
+
+
+def _scheduler(**overrides):
+    from vaspsolkit.config import SchedulerConfig
+
+    values = {"partition": "workq", "tasks": 24, "walltime": "12:00:00", "script": "vasp.slurm"}
+    values.update(overrides)
+    return SchedulerConfig(**values)
+
+
+def _slurm_scheduler():
+    from vaspsolkit.config import SchedulerConfig
+
+    scheduler = SchedulerConfig(script="vasp.slurm")
+    scheduler.tasks = scheduler.tasks
+    scheduler.partition = scheduler.partition
+    return scheduler
+
+
+def _fingerprint(root: Path) -> tuple[tuple[str, str, int], ...]:
+    return tuple(
+        (str(path.relative_to(root)), path.read_text(encoding="utf-8"), path.stat().st_mtime_ns)
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    )
+
+
+def test_plan_is_read_only_preserves_user_relaxation_and_has_exact_diffs(tmp_path):
+    from vaspsolkit.case_setup import plan_case_initialization
+
+    _write_case(tmp_path)
+    before = _fingerprint(tmp_path)
+
+    plan = plan_case_initialization(tmp_path, _scheduler())
+
+    assert _fingerprint(tmp_path) == before
+    assert plan.workdir == tmp_path.resolve()
+    assert plan.config.profile == "vaspsol-sweep"
+    assert plan.config.scheduler.script == "vasp.slurm"
+    assert plan.config.scheduler.tasks == 24
+    assert plan.config.scheduler.partition == "workq"
+    assert plan.config.scheduler.walltime == "12:00:00"
+    assert "ENCUT = 450" in plan.incar_after
+    assert "IBRION = 1" in plan.incar_after
+    assert "NSW = 88" in plan.incar_after
+    assert "LSOL = .TRUE." in plan.incar_after
+    assert [change.path.name for change in plan.file_changes] == [
+        "INCAR",
+        "vaspsolkit.json",
+        "vaspsolkit.state.json",
+    ]
+    assert all(change.change_type == "create" for change in plan.file_changes[1:])
+
+
+def test_plan_snapshots_are_frozen_and_defensive(tmp_path):
+    from vaspsolkit.case_setup import PlannedFileChange, plan_case_initialization
+
+    _write_case(tmp_path)
+    plan = plan_case_initialization(tmp_path, _scheduler())
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        plan.workdir = Path("elsewhere")
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        plan.file_changes[0].after = "changed"
+    config = plan.config
+    config.profile = "changed"
+    config.workflow.folders.append("extra")
+    assert plan.config.profile == "vaspsol-sweep"
+    assert "extra" not in plan.config.workflow.folders
+    assert tuple(item.label for item in plan.source_fingerprints) == (
+        "POSCAR", "INCAR", "KPOINTS", "POTCAR", "script"
+    )
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        plan.source_fingerprints[0].sha256 = "0" * 64
+    outside = PlannedFileChange((tmp_path.parent / "outside").resolve(), None, "x", "create")
+    with pytest.raises(ValueError, match="config change|within the Case"):
+        dataclasses.replace(plan, file_changes=(outside,))
+
+
+@pytest.mark.parametrize(
+    "incar, message",
+    [
+        ("ENCUT = 450\nENCUT = 500\n", "duplicate INCAR tags"),
+        ("LSOL = .FALSE.\n", "conflicting INCAR settings"),
+    ],
+)
+def test_plan_rejects_duplicate_and_conflicting_incar(tmp_path, incar, message):
+    from vaspsolkit.case_setup import plan_case_initialization
+
+    _write_case(tmp_path, incar=incar)
+    with pytest.raises(ValueError, match=message):
+        plan_case_initialization(tmp_path, _scheduler())
+
+
+@pytest.mark.parametrize("name", ["POSCAR", "INCAR", "KPOINTS", "POTCAR", "vasp.slurm"])
+@pytest.mark.parametrize("mode", ["missing", "empty"])
+def test_plan_requires_nonempty_source_files(tmp_path, name, mode):
+    from vaspsolkit.case_setup import plan_case_initialization
+
+    _write_case(tmp_path)
+    if mode == "missing":
+        (tmp_path / name).unlink()
+    else:
+        (tmp_path / name).write_text("", encoding="utf-8")
+    with pytest.raises((FileNotFoundError, ValueError), match=name):
+        plan_case_initialization(tmp_path, _scheduler())
+
+
+@pytest.mark.parametrize("script", ["/tmp/submit.sh", "../submit.sh"])
+def test_plan_rejects_script_traversal(tmp_path, script):
+    from vaspsolkit.case_setup import plan_case_initialization
+
+    _write_case(tmp_path)
+    with pytest.raises(ValueError, match="script"):
+        plan_case_initialization(tmp_path, _scheduler(script=script))
+
+
+def test_plan_rejects_script_symlink_outside_case_and_symlink_loop(tmp_path):
+    from vaspsolkit.case_setup import plan_case_initialization
+
+    case = tmp_path / "case"
+    case.mkdir()
+    _write_case(case)
+    outside = tmp_path / "outside.pbs"
+    outside.write_text("#!/bin/sh\n", encoding="utf-8")
+    (case / "outside-link.pbs").symlink_to(outside)
+    with pytest.raises(ValueError, match="script"):
+        plan_case_initialization(case, _scheduler(script="outside-link.pbs"))
+    (case / "loop.pbs").symlink_to("loop.pbs")
+    with pytest.raises(ValueError, match="script"):
+        plan_case_initialization(case, _scheduler(script="loop.pbs"))
+
+
+def test_existing_config_and_state_are_previewed_as_updates_with_exact_serialization(tmp_path):
+    from vaspsolkit.case_setup import plan_case_initialization
+
+    _write_case(tmp_path)
+    (tmp_path / "vaspsolkit.json").write_text("old config\n", encoding="utf-8")
+    (tmp_path / "vaspsolkit.state.json").write_text("old state\n", encoding="utf-8")
+
+    plan = plan_case_initialization(tmp_path, _scheduler())
+    changes = {change.path.name: change for change in plan.file_changes}
+
+    assert changes["vaspsolkit.json"].before == "old config\n"
+    assert changes["vaspsolkit.state.json"].before == "old state\n"
+    assert changes["vaspsolkit.json"].change_type == "update"
+    assert changes["vaspsolkit.state.json"].change_type == "update"
+    assert changes["vaspsolkit.json"].after == json.dumps(
+        plan.config.to_dict(), indent=2, sort_keys=True
+    )
+    assert json.loads(changes["vaspsolkit.state.json"].after)["stage"] == "setup"
+
+
+def test_apply_requires_confirmation_and_rejects_stale_incar(tmp_path):
+    from vaspsolkit.case_setup import apply_case_initialization, plan_case_initialization
+
+    _write_case(tmp_path)
+    plan = plan_case_initialization(tmp_path, _scheduler())
+    with pytest.raises(PermissionError, match="confirm"):
+        apply_case_initialization(plan)
+    (tmp_path / "INCAR").write_text("ENCUT = 999\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="stale"):
+        apply_case_initialization(plan, confirmed=True)
+    assert not (tmp_path / "vaspsolkit.json").exists()
+
+
+def test_apply_writes_only_declared_files(tmp_path):
+    from vaspsolkit.case_setup import apply_case_initialization, plan_case_initialization
+
+    _write_case(tmp_path)
+    plan = plan_case_initialization(tmp_path, _scheduler())
+    written = apply_case_initialization(plan, confirmed=True)
+
+    assert written == tuple(change.path for change in plan.file_changes)
+    assert (tmp_path / "INCAR").read_text(encoding="utf-8") in {plan.incar_before, plan.incar_after}
+    assert json.loads((tmp_path / "vaspsolkit.json").read_text(encoding="utf-8"))["profile"] == "vaspsol-sweep"
+
+
+def test_apply_preserves_concurrent_config_created_at_write_boundary(tmp_path, monkeypatch):
+    from vaspsolkit import case_setup, config as config_module
+    from vaspsolkit.case_setup import apply_case_initialization, plan_case_initialization
+    from vaspsolkit.config import KitConfig, SchedulerConfig
+
+    _write_case(tmp_path)
+    (tmp_path / "vasp.slurm").write_text("#!/bin/sh\n", encoding="utf-8")
+    scheduler = SchedulerConfig(script="vasp.slurm")
+    scheduler.tasks = scheduler.tasks
+    scheduler.partition = scheduler.partition
+    plan = plan_case_initialization(tmp_path, scheduler)
+    incar_before = (tmp_path / "INCAR").read_bytes()
+    concurrent = KitConfig(profile="vaspsol-neutral-relax")
+    concurrent.scheduler.partition = "concurrent"
+    concurrent_bytes = config_module.serialize_kit_config(concurrent)
+
+    real_stage = case_setup._stage_file_change
+
+    def interleaved_stage(change):
+        staged = real_stage(change)
+        if change.path.name == "vaspsolkit.state.json":
+            config_module.write_kit_config(tmp_path / "vaspsolkit.json", concurrent)
+        return staged
+
+    monkeypatch.setattr(case_setup, "_stage_file_change", interleaved_stage)
+
+    with pytest.raises(RuntimeError):
+        apply_case_initialization(plan, confirmed=True)
+
+    assert (tmp_path / "vaspsolkit.json").read_bytes() == concurrent_bytes
+    assert (tmp_path / "INCAR").read_bytes() == incar_before
+
+
+def test_apply_accepts_unchanged_crlf_config_snapshot(tmp_path):
+    from vaspsolkit.case_setup import apply_case_initialization, plan_case_initialization
+    from vaspsolkit.config import KitConfig, serialize_kit_config
+
+    _write_case(tmp_path)
+    (tmp_path / "vasp.slurm").write_text("#!/bin/sh\n", encoding="utf-8")
+    config_path = tmp_path / "vaspsolkit.json"
+    crlf_bytes = serialize_kit_config(KitConfig()).replace(b"\n", b"\r\n")
+    config_path.write_bytes(crlf_bytes)
+
+    plan = plan_case_initialization(tmp_path, _slurm_scheduler())
+    assert plan.config_before_bytes == crlf_bytes
+    written = apply_case_initialization(plan, confirmed=True)
+
+    assert config_path in written
+    assert json.loads(config_path.read_text(encoding="utf-8"))["config_version"] == 2
+
+
+def test_apply_rejects_changed_crlf_config_and_preserves_changed_bytes(tmp_path):
+    from vaspsolkit.case_setup import apply_case_initialization, plan_case_initialization
+    from vaspsolkit.config import KitConfig, serialize_kit_config
+
+    _write_case(tmp_path)
+    (tmp_path / "vasp.slurm").write_text("#!/bin/sh\n", encoding="utf-8")
+    config_path = tmp_path / "vaspsolkit.json"
+    original = serialize_kit_config(KitConfig()).replace(b"\n", b"\r\n")
+    config_path.write_bytes(original)
+    plan = plan_case_initialization(tmp_path, _slurm_scheduler())
+    changed = KitConfig()
+    changed.scheduler.partition = "concurrent"
+    changed_bytes = serialize_kit_config(changed).replace(b"\n", b"\r\n")
+    config_path.write_bytes(changed_bytes)
+
+    with pytest.raises(RuntimeError, match="stale initialization target"):
+        apply_case_initialization(plan, confirmed=True)
+
+    assert config_path.read_bytes() == changed_bytes
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "poscar-content",
+        "kpoints-delete",
+        "potcar-retarget",
+        "script-content",
+        "script-loop",
+    ],
+)
+def test_apply_rejects_any_stale_source_before_writing(tmp_path, mutation):
+    from vaspsolkit.case_setup import apply_case_initialization, plan_case_initialization
+
+    _write_case(tmp_path)
+    if mutation == "potcar-retarget":
+        original = tmp_path / "POTCAR.original"
+        (tmp_path / "POTCAR").rename(original)
+        (tmp_path / "POTCAR").symlink_to(original.name)
+    plan = plan_case_initialization(tmp_path, _scheduler())
+
+    if mutation == "poscar-content":
+        (tmp_path / "POSCAR").write_text("changed\n", encoding="utf-8")
+    elif mutation == "kpoints-delete":
+        (tmp_path / "KPOINTS").unlink()
+    elif mutation == "potcar-retarget":
+        replacement = tmp_path / "POTCAR.replacement"
+        replacement.write_text(
+            "TITEL = PAW_PBE C 08Apr2002\nENMAX = 400.0 eV\n", encoding="utf-8"
+        )
+        (tmp_path / "POTCAR").unlink()
+        (tmp_path / "POTCAR").symlink_to(replacement.name)
+    elif mutation == "script-content":
+        (tmp_path / "vasp.slurm").write_text("#!/bin/sh\nchanged\n", encoding="utf-8")
+    else:
+        (tmp_path / "vasp.slurm").unlink()
+        (tmp_path / "vasp.slurm").symlink_to("vasp.slurm")
+
+    with pytest.raises(RuntimeError, match="stale initialization source"):
+        apply_case_initialization(plan, confirmed=True)
+    assert not (tmp_path / "vaspsolkit.json").exists()
+    assert not (tmp_path / "vaspsolkit.state.json").exists()
+
+
+def test_apply_stage_failure_leaves_all_targets_unchanged_and_cleans_temps(
+    tmp_path, monkeypatch
+):
+    import vaspsolkit.case_setup as case_setup
+
+    _write_case(tmp_path)
+    config = tmp_path / "vaspsolkit.json"
+    state = tmp_path / "vaspsolkit.state.json"
+    config.write_text("old config\n", encoding="utf-8")
+    state.write_text("old state\n", encoding="utf-8")
+    plan = case_setup.plan_case_initialization(tmp_path, _scheduler())
+    before = {path: path.read_bytes() for path in (tmp_path / "INCAR", config, state)}
+    real_stage = case_setup._stage_file_change
+    calls = 0
+
+    def fail_second(change):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("injected staging failure")
+        return real_stage(change)
+
+    monkeypatch.setattr(case_setup, "_stage_file_change", fail_second)
+
+    with pytest.raises(RuntimeError, match="stage") as error:
+        case_setup.apply_case_initialization(plan, confirmed=True)
+    assert error.value.phase == "stage"
+    assert all(path.read_bytes() == content for path, content in before.items())
+    assert list(tmp_path.glob(".*.tmp")) == []
+
+
+def test_apply_replace_failure_restores_originals_and_cleans_remaining_temps(
+    tmp_path, monkeypatch
+):
+    import vaspsolkit.case_setup as case_setup
+
+    _write_case(tmp_path)
+    config = tmp_path / "vaspsolkit.json"
+    state = tmp_path / "vaspsolkit.state.json"
+    config.write_text("old config\n", encoding="utf-8")
+    state.write_text("old state\n", encoding="utf-8")
+    before = {path: path.read_bytes() for path in (tmp_path / "INCAR", config, state)}
+    plan = case_setup.plan_case_initialization(tmp_path, _scheduler())
+    real_replace = case_setup.os.replace
+    calls = 0
+
+    def fail_second(source, target):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("injected replace failure")
+        return real_replace(source, target)
+
+    monkeypatch.setattr(case_setup.os, "replace", fail_second)
+
+    with pytest.raises(RuntimeError, match="replace") as error:
+        case_setup.apply_case_initialization(plan, confirmed=True)
+    assert error.value.phase == "replace"
+    assert all(path.read_bytes() == data for path, data in before.items())
+    assert list(tmp_path.glob(".*.tmp")) == []
+
+
+def _original_targets(root):
+    _write_case(root)
+    targets = {
+        root / "INCAR": (b"# original \xff\r\nENCUT = 450\r\nIBRION = 1\r\nNSW = 88\r\n", 0o640),
+        root / "vaspsolkit.json": (b"original config\r\n", 0o604),
+        root / "vaspsolkit.state.json": (b"original state\r\n", 0o600),
+    }
+    for path, (data, mode) in targets.items():
+        path.write_bytes(data)
+        path.chmod(mode)
+    return targets
+
+
+@pytest.mark.parametrize("failure_target", ["INCAR", "vaspsolkit.state.json"])
+@pytest.mark.parametrize("after_replace", [False, True])
+def test_apply_restores_exact_bytes_and_modes_after_publish_error(
+    tmp_path, monkeypatch, failure_target, after_replace
+):
+    from vaspsolkit import case_setup
+
+    original = _original_targets(tmp_path)
+    plan = case_setup.plan_case_initialization(tmp_path, _scheduler())
+    real_replace = case_setup.os.replace
+    failed = False
+
+    def fail_once(source, target):
+        nonlocal failed
+        if Path(target).name == failure_target and not failed:
+            failed = True
+            if after_replace:
+                real_replace(source, target)
+            raise OSError("injected publication failure")
+        return real_replace(source, target)
+
+    monkeypatch.setattr(case_setup.os, "replace", fail_once)
+    with pytest.raises(case_setup.CaseInitializationApplyError, match="replace"):
+        case_setup.apply_case_initialization(plan, confirmed=True)
+    for path, (data, mode) in original.items():
+        assert path.read_bytes() == data
+        assert path.stat().st_mode & 0o7777 == mode
+    assert list(tmp_path.glob(".*.tmp")) == []
+
+
+def test_apply_success_preserves_existing_permissions(tmp_path):
+    from vaspsolkit import case_setup
+
+    original = _original_targets(tmp_path)
+    plan = case_setup.plan_case_initialization(tmp_path, _scheduler())
+    case_setup.apply_case_initialization(plan, confirmed=True)
+    for path, (_data, mode) in original.items():
+        assert path.stat().st_mode & 0o7777 == mode
+
+
+@pytest.mark.parametrize("fail_sync", [False, True])
+def test_apply_syncs_case_directory_and_rolls_back_sync_failure(tmp_path, monkeypatch, fail_sync):
+    from vaspsolkit import case_setup
+
+    original = _original_targets(tmp_path)
+    plan = case_setup.plan_case_initialization(tmp_path, _scheduler())
+    real_fsync = case_setup.os.fsync
+    directory_syncs = []
+
+    def sync(descriptor):
+        metadata = case_setup.os.fstat(descriptor)
+        if case_setup.stat.S_ISDIR(metadata.st_mode):
+            directory_syncs.append(metadata.st_ino)
+            if fail_sync:
+                raise OSError("injected directory sync failure")
+        return real_fsync(descriptor)
+
+    monkeypatch.setattr(case_setup.os, "fsync", sync)
+    if fail_sync:
+        with pytest.raises(case_setup.CaseInitializationApplyError, match="directory sync failure"):
+            case_setup.apply_case_initialization(plan, confirmed=True)
+        for path, (data, mode) in original.items():
+            assert path.read_bytes() == data
+            assert path.stat().st_mode & 0o7777 == mode
+    else:
+        case_setup.apply_case_initialization(plan, confirmed=True)
+    assert directory_syncs == [tmp_path.stat().st_ino]
+    assert list(tmp_path.glob(".*.tmp")) == []
+
+
+def test_apply_failure_removes_only_its_new_files(tmp_path, monkeypatch):
+    from vaspsolkit import case_setup
+
+    _write_case(tmp_path)
+    before = (tmp_path / "INCAR").read_bytes()
+    plan = case_setup.plan_case_initialization(tmp_path, _scheduler())
+    real_replace = case_setup.os.replace
+
+    def fail_incar(source, target):
+        if Path(target).name == "INCAR":
+            raise OSError("cannot publish INCAR")
+        return real_replace(source, target)
+
+    monkeypatch.setattr(case_setup.os, "replace", fail_incar)
+    with pytest.raises(case_setup.CaseInitializationApplyError):
+        case_setup.apply_case_initialization(plan, confirmed=True)
+    assert (tmp_path / "INCAR").read_bytes() == before
+    assert not (tmp_path / "vaspsolkit.json").exists()
+    assert not (tmp_path / "vaspsolkit.state.json").exists()
+    assert list(tmp_path.glob(".*.tmp")) == []
+
+
+@pytest.mark.parametrize("mutation", ["content", "permissions", "same-bytes-replacement"])
+def test_rollback_preserves_external_changes_and_reports_path(tmp_path, monkeypatch, mutation):
+    from vaspsolkit import case_setup
+
+    original = _original_targets(tmp_path)
+    config = tmp_path / "vaspsolkit.json"
+    state = tmp_path / "vaspsolkit.state.json"
+    plan = case_setup.plan_case_initialization(tmp_path, _scheduler())
+    real_replace = case_setup.os.replace
+    concurrent = {}
+
+    def fail_after_external_edit(source, target):
+        if Path(target) == state:
+            if mutation == "content":
+                config.write_bytes(b"external config\n")
+            elif mutation == "permissions":
+                config.chmod(0o444)
+            else:
+                replacement = tmp_path / "external-config"
+                replacement.write_bytes(config.read_bytes())
+                replacement.chmod(config.stat().st_mode & 0o7777)
+                real_replace(replacement, config)
+            concurrent.update(data=config.read_bytes(), mode=config.stat().st_mode, inode=config.stat().st_ino)
+            raise OSError("state publication failed")
+        return real_replace(source, target)
+
+    monkeypatch.setattr(case_setup.os, "replace", fail_after_external_edit)
+    with pytest.raises(case_setup.CaseInitializationApplyError) as error:
+        case_setup.apply_case_initialization(plan, confirmed=True)
+    assert config.read_bytes() == concurrent["data"]
+    assert config.stat().st_mode == concurrent["mode"]
+    assert config.stat().st_ino == concurrent["inode"]
+    assert str(config) in str(error.value)
+    assert "rollback" in str(error.value)
+    assert error.value.rollback_errors
+    for path in (tmp_path / "INCAR", state):
+        assert path.read_bytes() == original[path][0]
+        assert path.stat().st_mode & 0o7777 == original[path][1]
+
+
+def test_rollback_failure_reports_target_and_retains_original_backup(tmp_path, monkeypatch):
+    from vaspsolkit import case_setup
+
+    original = _original_targets(tmp_path)
+    config = tmp_path / "vaspsolkit.json"
+    plan = case_setup.plan_case_initialization(tmp_path, _scheduler())
+    real_replace = case_setup.os.replace
+    config_written = False
+
+    def fail_publish_and_rollback(source, target):
+        nonlocal config_written
+        if Path(target).name == "INCAR":
+            raise OSError("cannot publish INCAR")
+        if Path(target) == config:
+            if config_written:
+                raise PermissionError("cannot restore configuration")
+            config_written = True
+        return real_replace(source, target)
+
+    monkeypatch.setattr(case_setup.os, "replace", fail_publish_and_rollback)
+    with pytest.raises(case_setup.CaseInitializationApplyError) as error:
+        case_setup.apply_case_initialization(plan, confirmed=True)
+    assert str(config) in str(error.value)
+    assert "rollback" in str(error.value)
+    assert "cannot restore configuration" in str(error.value)
+    assert error.value.rollback_errors
+    backups = list(tmp_path.glob(".vaspsolkit.json.*.tmp"))
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == original[config][0]
+    assert backups[0].stat().st_mode & 0o7777 == original[config][1]
+    assert str(backups[0]) in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "mutation", ["config-symlink-delete", "state-symlink-retarget", "config-directory"]
+)
+def test_apply_rejects_nominal_target_entry_mutation_before_staging(tmp_path, mutation):
+    from vaspsolkit.case_setup import apply_case_initialization, plan_case_initialization
+
+    _write_case(tmp_path)
+    config = tmp_path / "vaspsolkit.json"
+    state = tmp_path / "vaspsolkit.state.json"
+    if mutation == "config-symlink-delete":
+        target = tmp_path / "config.original"
+        target.write_text("old config\n", encoding="utf-8")
+        config.symlink_to(target.name)
+    elif mutation == "state-symlink-retarget":
+        first = tmp_path / "state.first"
+        first.write_text("old state\n", encoding="utf-8")
+        state.symlink_to(first.name)
+    plan = plan_case_initialization(tmp_path, _scheduler())
+    incar_before = (tmp_path / "INCAR").read_bytes()
+
+    if mutation == "config-symlink-delete":
+        config.unlink()
+    elif mutation == "state-symlink-retarget":
+        second = tmp_path / "state.second"
+        second.write_text("old state\n", encoding="utf-8")
+        state.unlink()
+        state.symlink_to(second.name)
+    else:
+        config.mkdir()
+
+    with pytest.raises(RuntimeError, match="stale initialization target"):
+        apply_case_initialization(plan, confirmed=True)
+    assert (tmp_path / "INCAR").read_bytes() == incar_before
+    assert list(tmp_path.glob(".*.tmp")) == []
+
+
+def test_cli_existing_incar_noninteractive_path_reuses_case_setup(tmp_path, monkeypatch):
+    from vaspsolkit import cli
+    from vaspsolkit.case_setup import plan_case_initialization
+
+    _write_case(tmp_path)
+    real_plan = plan_case_initialization(tmp_path, _scheduler())
+    calls = []
+    monkeypatch.setattr(cli, "plan_case_initialization", lambda workdir, scheduler, workflow: calls.append((workdir, scheduler, workflow)) or real_plan)
+    monkeypatch.setattr(cli, "apply_case_initialization", lambda plan, confirmed=False: calls.append((plan, confirmed)) or ())
+
+    result = cli.main([
+        "init", "--workdir", str(tmp_path), "--scheduler", "slurm", "--script", "vasp.slurm",
+        "--she-reference", "4.70", "--yes"
+    ])
+
+    assert result == 0
+    assert calls[0][0] == tmp_path.resolve()
+    assert calls[1] == (real_plan, True)
+
+
+def test_controller_init_translates_core_changes_to_file_diffs(tmp_path):
+    from vaspsolkit.operations.actions import ResourceRequest
+    from vaspsolkit.operations.controller import WorkbenchController
+
+    _write_case(tmp_path)
+    resources = ResourceRequest(
+        allocation="auto", partition="workq", nodes=(), node_count=1,
+        tasks=24, tasks_per_node=24, walltime="12:00:00", script="vasp.slurm"
+    )
+
+    plan = WorkbenchController(tmp_path).plan("init", resources)
+
+    assert plan.effect == "file-changing"
+    assert [diff.path.name for diff in plan.file_diffs] == [
+        "INCAR", "vaspsolkit.json", "vaspsolkit.state.json"
+    ]
+    assert plan.warnings == ()
+    assert plan.scheduler_request == resources
