@@ -1,5 +1,9 @@
 # VASPsolKit
 
+[在线用户手册](https://xiandima.github.io/vaspsolkit/) · [第一次计算](https://xiandima.github.io/vaspsolkit/quickstart.html) · [E-U 结果示例](https://xiandima.github.io/vaspsolkit/results.html)
+
+> 在线手册对应 `0.4.0` 开发快照，部分功能尚未合入本分支；安装前请核对[手册版本说明](https://xiandima.github.io/vaspsolkit/versions.html)。
+
 VASPsolKit 是面向 VASP/VASPsol 固定 NELECT 扫描与电势后处理的状态驱动终端工作流。它把中性结构优化、
 带电点准备、SLURM 提交、收敛检查、结果收集和五点 E-U 拟合组织为可恢复的 Case。
 
