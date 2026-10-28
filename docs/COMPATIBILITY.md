@@ -1,147 +1,133 @@
 # 实测兼容性与限制
 
-本页对应 `main` 上的 `0.4.0` 开发版，验收日期为 2026-10-24。以下“通过”仅指列出的离线或
-假程序测试，不代表真实集群、VASP 版本或科学结果已经验收。
+本页说明哪些用法已有软件测试、哪些仍需你在服务器上验证。
+所列环境的软件回归于 2026-10-28 再次核验，对应 `main` 上的 `0.4.0` 开发版。
+**离线测试或模拟调度器通过，不代表真实集群、VASP 版本或科学结果已经验收。**
 
-## 测试环境
+## 先判断能否使用
 
-- Linux x86_64：Python 3.9.17 / pytest 8.3.2 / matplotlib 3.9.4 / setuptools 68.0.0；
-  独立 Python 3.12.15 / pytest 9.1.1 / matplotlib 3.11.2 / setuptools 84.2.1 环境。
-- Python 3.12 环境重新下载并安装运行、测试及文档依赖；它仍是同一台 Linux 机器，
-  不等于所有操作系统、CPU 或集群均已验证。
-- wheel 回归测试在含空格路径的新 venv 中复用测试环境依赖，但移除源码路径注入，
-  检查实际安装来源，并用安装后的命令完成初始化、离线计划、准备、提交预览和合成五点后处理。
-- 每个 CLI 子进程使用临时 HOME、状态目录和 PATH。无集群场景的 PATH 为空；假调度器
-  仅记录 argv/cwd 并返回固定 Job ID 或状态，绝不执行提交脚本。
-- POSCAR/POTCAR 等均为测试合成文本，POTCAR 仅含解析用元数据，不可用于计算。
-  未访问真实调度器、未启动 VASP、未复制真实 POTCAR 或凭据。
-
-## 兼容矩阵
-
-主要黑盒证据位于 [test_documented_workflows.py](../tests/test_documented_workflows.py)，
-输入边界和故障证据位于 [test_input_portability.py](../tests/test_input_portability.py) 与
-[test_scheduler_portability.py](../tests/test_scheduler_portability.py)；Case 规划的路径限制见
-[test_vaspsolkit_case_setup.py](../tests/test_vaspsolkit_case_setup.py)。
-
-| 场景 | 实测结果 | 范围与限制 |
+| 你的环境或用法 | 当前支持情况 | 使用前要做什么 |
 | --- | --- | --- |
-| Case、HOME、源码及 venv 路径含空格 | 通过 | Shell 中路径加引号；不等于任意脚本文件名都被受管理资源接口接受 |
-| wheel 构建、安装与两个入口 | 通过 | 检查 wheel 包名、安装模块位于新 venv、`direct_url.json` 指向该 wheel；验证两个入口及手册中的离线初始化到合成五点画图路径 |
-| 无 VASPKIT、无 VASP、无集群命令 | 通过 | 输入齐全时 `init --yes`、`plan --offline`、`prepare-neutral --yes`、中性提交 `--dry-run`；并非实际计算 |
-| 无交互 `init --yes` | 通过 | 显式给出 scheduler/script/SHE reference；缺 INCAR 还须 profile；保持 stdin 打开也不等待输入 |
-| 已有 INCAR、不指定 profile | 通过 | 保留用户值，补必要标签；冲突和重复标签须人工处理。后续 prepare 使用阶段 profile，须另行核对 |
-| 用户提交脚本保留 | 通过 | 初始化、准备、中性 CLI dry-run/假提交不覆盖脚本；测试保留 account/qos、自定义正文与文件权限 |
-| 已有 Case 续跑 | 通过 | 假提交后 status/run 保留 Job ID、不重复投递；再次 init 被拒绝且原文件不变；更新 SHE 来源不清空状态 |
-| CLI 通用初始化分支写入失败 | 故障注入覆盖 | INCAR 原子写入；失败时尝试恢复本次已写文件。检测到外部改动时保留改动，并报 manual review 路径；不是崩溃事务 |
-| 无 sinfo 的资源配置 | 安全失败 | `configure-scheduler` 显示错误，不改已有配置；不是自动推断节点模式 |
-| custom 命令路径含空格 | 通过 | CLI 分词保留参数，假提交/查询/续跑可用；分号和 `$HOME` 作为字面参数传递，不经过 Shell |
-| custom 未配置 status | 明确提示 | 初始化可成功，状态为 UNKNOWN；不表示已具备完整跟踪能力 |
-| 交互 VASPKIT 补缺失输入 | 假程序通过 | 临时目录运行、仅导入缺失 POTCAR/KPOINTS；已有 INCAR、结构、脚本及另一输入不被工具改动覆盖 |
-| VASPKIT 失败或输入并发变化 | 安全拒绝 | 对退出码、空文件、符号链接、错误元素、格式错误及交互期间源文件变化有回归测试 |
-| 元素标签与辅助程序路径 | 通过 | 路径型 POSCAR 标签在暂存前拒绝；支持分数氢 POTCAR 变体；PATH 的相对目录、空格与辅助程序软链接有回归测试 |
-| VASPKIT 暂存或部分发布失败 | 故障注入覆盖 | 全部校验数据先在 Case 同盘暂存，再以 hard link 无覆盖发布；回滚前检查归属和内容，检测到外部变化或回滚失败时明确报路径 |
-| 四行规则 KPOINTS | 通过 | Gamma/Monkhorst-Pack 网格的偏移行可省略，默认零偏移；显式非法偏移被拒绝 |
-| KSPACING-only、无 KPOINTS | 通过 | 有限正数 KSPACING、可选 KGAMMA；初始化、中性/带电准备、快照和提交前检查均支持；包括 D 指数、非法值与原有 KPOINTS 优先级测试 |
-| `inputs` / `init --yes` 自动补全 | 通过 | 显式 mesh，或 VASPKIT 1.5.x 的 103/102；缺参数一次报出，不猜测赝势；native 可不依赖 VASPKIT |
-| 保存输入配置并复用 | 通过 | 显式 --save-settings 或交互补全时确认保存，默认 XDG_CONFIG_HOME；复用库/映射/密度设置，不跨体系复用显式网格 |
-| 菜单首次补全、取消与重试 | 通过 | 14/02 提供保存询问，默认不保存；取消不写输入/配置；错误提示可重新选择补全，再进入初始化 |
-| 自动分配在不同分区的服务器上使用 | 假程序通过 | 可选择本机分区，不要求存在 compute；空列表/查询失败/无效分区可取消且原配置不变；自动分配不绑定节点 |
-| 无 TTY 缺参数、stdin 保持打开 | 通过 | init 缺基础必填项和 configure-reference 缺参考值时立即报错；完整批处理应显式 --yes，不以开放管道代替交互终端 |
-| 菜单 14 / inputs / next | 通过 | 统一补全入口；next 一次执行一个动作，dry-run 不查询队列；写入和提交保留确认 |
-| 内置 SLURM 提交与状态查询 | 假程序通过 | 不代表账户/分区、控制器、MPI、模块或真实作业已验证 |
-| 部分批次失败与并发限制 | 故障注入覆盖 | CLI 通过逐任务回执保存已接受的 Job ID；未决回执阻止重提；选点提交将超出 max_inflight 的任务留为 PREPARED |
-| 重算后结果新鲜度 | 通过 | Job ID、重启次数、配置或源文件 stat 信息变化后推荐重新 collect；旧版缺少采集记录时也需重新 collect |
-| 已有计算的外置路径 | 通过 | collect 可读取外置 job_root；submit/submit-selected 可只读使用外置 --config，并检查确认期间的修改；写回资源配置仍须位于 Case 内 |
-| 子目录独立提交脚本 | 通过 | 已准备扫描点可使用各自的脚本，不再要求根目录脚本仍存在；每个所选子目录的脚本仍需先通过路径检查，中性提交仍需根目录脚本 |
-| 内置 PBS | 不支持 | 旧 PBS 配置不自动迁移；custom 包装器须自行实现、验证和维护 |
-| 原生 Windows、macOS、多用户共享写同一 Case | 本轮未验收 | 核心使用 POSIX `fcntl` 锁，原生 Windows 不是当前支持目标；隔离 HOME 测试不等于多账户权限测试 |
+| Linux x86_64、Python 3.9 或更新 | 已在下方两个 Python 环境测试 | 使用独立环境，按[安装指南](INSTALLATION.md)核对实际导入位置 |
+| SLURM | 内置提交和查询；自动化测试使用模拟调度器 | 用本机小体系确认账户、分区、模块、MPI 和 VASP |
+| PBS 或其他调度器 | 不内置 PBS；custom 需要自己的包装命令 | 按[自定义适配](CLUSTER_CONFIGURATION.md#custom-适配边界)验证提交、查询和取消 |
+| 没有 VASPKIT | 可用原生输入补全 | 提供合法赝势库、元素映射与采样 |
+| VASPKIT 1.5.x | 支持输入生成任务 103/102 | 核对版本；其他版本使用原生后端或自行提供输入 |
+| 只有 KSPACING，没有 KPOINTS | 支持有限正数 KSPACING，可选 KGAMMA | 已有 KPOINTS 时仍优先使用文件，不自动回退 |
+| Case、HOME、源码或环境目录含空格 | 已有测试 | Shell 中路径加引号；提交脚本仍用 vasp.slurm 等简单名称 |
+| 原生 Windows | 不是当前支持目标 | 程序依赖 POSIX 文件锁 |
+| macOS 或多用户同时写同一 Case | 尚未验收 | 不把单机或隔离目录测试当作该场景保证 |
 
-## 使用边界
+首次换服务器或方法，请先按[服务器适配](CLUSTER_CONFIGURATION.md)做小体系验证。
+`plan --offline` 和提交 `--dry-run` 可以检查部分文件流程，但不验证真实运行环境。
 
-### 安装与版本来源
+## 输入与文件要求
 
-在独立 Case 目录检查当前 Python 实际导入的包：
+使用带元素名称行的 VASP5 POSCAR，自行确认 POTCAR 类型、顺序和授权。
+ENMAX 推算的 ENCUT 只是建议，不替代收敛测试；保留已有 INCAR 的初始化分支不会自动填写缺失 ENCUT。
+中性与扫描准备会再次应用阶段参数，须检查生成后的输入。
+
+输入与提交脚本应为 Case 内的普通文件。初始化拒绝替换符号链接 INCAR，
+指向 Case 外的输入或脚本链接也受限制。先复制模板为普通文件，不把链接方案当作通用支持。
+
+### 补齐输入后如何判断
+
+程序只生成缺失输入，不覆盖已有文件。赝势库、泛函和元素变体须由你确认，程序不会下载赝势。
+VASPKIT 在临时目录运行，只允许输入生成任务，不携带提交脚本、不修改用户的 `~/.vaspkit`。
+生成结果还会核对元素顺序、变体、泛函和确认库的内容，校验失败不会导入。
+
+看到输入生成成功后，核对生成文件和 `vaspsolkit.inputs-<id>.json`，再做基础输入检查。
+保存复用设置是后续独立步骤；保存失败或后来取消初始化，不表示已生成输入被删除。
+保存的库路径为绝对路径，新元素需重新确认，不跨体系复用结构或显式网格。
+
+存在活动任务、损坏或未决提交回执时，先处理任务状态，不能绕过保护补全输入。
+
+### 写入失败或意外中断
+
+输入所在文件系统须支持硬链接，VASPKIT 导入用它避免覆盖已有同名文件。
+不要同时用编辑器、另一个菜单或脚本修改正在初始化、导入或恢复的同一 Case。
+
+遇到 `rollback needs manual review` 或 `rollback incomplete` 时：
+
+1. 保留错误提示、现有文件与列出的备份，不立即重复初始化。
+2. 逐项核对提示中的文件；程序检测到外部修改时会保留修改，并要求人工检查。
+3. 确认输入、配置和状态一致后再决定如何继续；不确定时按[恢复章节](recovery.md)整理诊断。
+
+程序会对能捕获的写入异常尝试恢复，但进程被强制终止、系统崩溃或断电后，
+**不保证整批文件全部写入或全部撤销，也不保证自动恢复所有文件**。
+
+## 资源与提交范围
+
+初始化不会自动导入脚本里的资源请求。默认
+`compute / 1 节点 / 96 tasks / 72:00:00` 会在提交时显式传入，可能覆盖同名 `#SBATCH` 选项。
+脚本文字保留不等于实际资源请求不变；受管理启动方式仍限 `mpirun + vasp_std`。
+时限、账户、内存及复杂脚本的处理见[服务器适配](CLUSTER_CONFIGURATION.md)。
+
+自动分配可以选择本机分区，不要求存在 compute；查询失败时须先恢复查询，程序不会猜分区。
+custom 包装命令不经 Shell 执行；未配置状态查询时只能得到 UNKNOWN，不能据此重提。
+
+`max_inflight` 仅限制当前 Case 的在途任务，不是全用户配额。
+部分提交成功时保留已接受的 Job ID；超出上限的点保留 PREPARED，之后需要再次选择提交，
+不是退出后自动补交。未决回执或 UNKNOWN 必须先查明原作业状态。
+
+已有计算可使用外置 `job_root` 收集结果；submit/submit-selected 可只读使用外置 `--config`，
+但保存资源设置仍要求配置位于 Case 内。已准备扫描点可使用各自的提交脚本，
+不要求根目录脚本仍存在；中性提交仍需要根目录脚本，各点脚本仍须通过检查。
+
+## 继续计算与恢复
+
+已有 `vaspsolkit.json` 或 `vaspsolkit.state.json` 时，使用菜单或 status 继续，不删除状态重新 init。
+Case 状态与用户级提交回执共同防止重复提交。活动记录默认位于
+`${XDG_STATE_HOME:-~/.local/state}/vaspsolkit/cases`，可由 `VASPSOLKIT_STATE_ROOT` 指定。
+
+迁移到新账户、目录或服务器不是经过验证的自动续跑方案。
+先核对原 Job ID 与未决回执，不携带旧状态到新位置直接重提，也不切换状态目录绕过提交保护。
+
+`plan`、`status`、`monitor` 可能查询调度器；`plan --offline` 不查询队列。
+`--yes` 表示同意写入或提交，不是预览。重算或采集设置变更后重新 collect、audit 和 postprocess；
+旧版缺少采集记录时也应重新收集。
+
+队列 COMPLETED 与 VASP 收敛须分开判断。完整输出和 CONVERGED 仍不代替人工科学验收，
+具体见[结果检查](results.md)和[计算约定](SCIENTIFIC_CONVENTIONS.md)。
+
+## 安装来源排查
+
+升级后仍显示旧菜单时，在独立 Case 目录执行：
 
 ```bash
 python -c 'import vaspsolkit; print(vaspsolkit.__version__, vaspsolkit.__file__)'
 ```
 
-旧源码目录或残留 `PYTHONPATH` 会遮蔽新安装，尤其是 `python -m vaspsolkit`；先更换工作目录、
-清理旧路径并确认虚拟环境，再解释旧菜单或 PBS 提示。版本号同为 `0.4.0` 也不能单独证明
-导入了当前 main 修订，必须核对文件来源及[手册构建提交](versions.md)。
+先确认环境与导入路径；旧源码目录或 PYTHONPATH 可能遮蔽新安装，
+`python -m vaspsolkit` 也不能绕过这种遮蔽。
+同为 0.4.0 不代表相同修订，应同时核对[构建提交](versions.md)。
 
-离线构建使用 `--no-build-isolation` 时，调用环境必须已具备 `setuptools>=68` 和 `wheel`。
-不能仅依据 pip 返回 0 判断 wheel 正确：过旧构建工具可能产生 `UNKNOWN-0.0.0`。安装测试
-因此检查产物元数据和实际安装来源。`--no-deps` 不会替用户补齐 matplotlib 等依赖。
+离线安装要带齐 matplotlib 等依赖，`--no-deps` 不会补齐它们。
+自行构建且使用 `--no-build-isolation` 时，需要 `setuptools>=68` 和 `wheel`；
+过旧工具可能产生 `UNKNOWN-0.0.0`，不能只凭 pip 返回成功判断产物正确。
+具体命令见[安装与升级](INSTALLATION.md)。
 
-### 输入与脚本
+## 测试证据与复现
 
-使用 VASP5 元素行的 POSCAR，并自行确认 POTCAR 类型、顺序和许可证。ENMAX 建议不等于
-ENCUT 已做收敛测试；保留已有 INCAR 的初始化路径不会自动填写缺失 ENCUT。
+以下记录供核对验证范围，不是使用程序的前置学习内容。
 
-CLI 通用初始化分支拒绝替换 symlink INCAR；请先将模板复制为 Case 内的普通文件，避免
-失败恢复破坏链接语义。Case 规划还限制指向 Case 外部的输入或脚本链接，不能把模板链接
-方案视为所有初始化入口通用支持。
+- 测试平台为同一台 Linux x86_64：Python 3.9.17 / pytest 8.3.2 / matplotlib 3.9.4 / setuptools 68.0.0，以及独立 Python 3.12.15 / pytest 9.1.1 / matplotlib 3.11.2 / setuptools 84.2.1 环境。
+- 安装测试在含空格路径的新环境中检查安装来源及两个命令入口，覆盖初始化、离线计划、准备、提交预览和合成五点后处理；不是实际五点计算。
+- 测试隔离 HOME、状态目录与 PATH。模拟调度器只返回预设 Job ID 或状态，不执行提交脚本；合成 POTCAR 仅供解析，不能用于计算。
+- 已覆盖无交互缺参、输入格式、KSPACING、模板保留、取消与重试、重复初始化、部分提交和旧结果更新等路径，并通过模拟故障检查写入失败时的处理。
+- VASPKIT 1.5.0 的临时输入生成测试也使用合成解析数据，不是合法赝势库的科学计算验收。
+- 上述证据未运行真实 VASP 或访问真实调度器，不能推广为任意操作系统、集群或科学方法已通过验证。
+- 在线手册另用 Chromium 检查桌面和手机布局、搜索、复制、目录与键盘导航；这不改变计算程序的系统要求。
 
-将脚本放在 Case 内，使用 `vasp.slurm` 等简单文件名。本轮验证的是目录路径含空格，不能
-推断绝对脚本路径、向 Case 外的链接或任意复杂脚本都支持。初始化不自动导入脚本里的
-资源：默认 compute / 1 节点 / 96 tasks / 72:00:00 会在提交时显式传入，可能覆盖 `#SBATCH`
-头。脚本文本保留不等于最终资源请求不变；受管理 profile 的 launcher 仍限 `mpirun + vasp_std`。
-
-自动补全默认使用原生后端；可选 VASPKIT 1.5.x。已对本机 1.5.0 执行只生成 POTCAR、
-只生成 KPOINTS、同时生成两者的临时冒烟测试，使用合成解析数据，**不是合法赝势库的
-科学计算验收**。其他错误路径使用假外部程序覆盖。不同版本目前明确拒绝自动任务，
-应使用 native 后端或用户提供的输入。
-
-临时运行只提供结构和相关输入，不传提交脚本；隔离 HOME、显式关闭自动提交、固定允许
-任务 103/102，并设 120 秒超时。赝势映射先从用户授权的库校验，再构造临时选择目录，
-不修改用户的 ~/.vaspkit。不默认采用工具自己的推荐赝势，输出还须通过顺序、变体和
-泛函检查，并与确认库的有序拼接逐字节一致；工具改动临时 POSCAR 时拒绝导入。
-活动任务、损坏或未决提交回执均阻止补全，发布前会再次检查。保存的赝势库统一为绝对路径，
-避免换目录后误选同名不同版本的库。已存在输入不会被替换。补全成功后再取消初始化不删除已确认生成的文件；
-可复用配置保存是后续独立步骤，保存失败会提示输入已完成，不能误认为整项操作未执行。
-
-VASPKIT 导入在 Case 所在文件系统暂存全部已校验数据，再通过 hard link 逐一发布，已有
-同名文件不会被覆盖；目标文件系统须支持 hard link。暂存失败不发布输入；发布途中失败时，
-仅撤销检查时仍属于本次导入、且内容未改变的文件。检查时检测到的外部替换或原位改动
-会被保留，并报告需人工检查的具体路径。锁是协作式锁，不能隔离不遵守锁的其他程序；
-不要同时用编辑器或其他脚本修改正在初始化、导入或回滚的同一 Case。
-
-初始化与输入导入的回滚只针对程序能捕获并处理的异常。CLI 通用初始化分支对 INCAR 使用
-原子写入，后续失败时尝试恢复本次已写文件；内容不再匹配或恢复操作失败时报告
-`rollback needs manual review`。默认 Slurm 初始化也会先暂存原始字节和权限，发布失败时
-尝试恢复；检测到变化或无法恢复时报告 `rollback incomplete` 及保留的备份路径。
-此时应先核对所列文件再决定如何重试。**逐文件原子写入、
-无覆盖发布和异常回滚均不等于跨文件、跨进程的 crash transaction**：进程被强制终止、
-系统崩溃或断电后不保证自动恢复全部文件，也不保证整个初始化全成或全败。
-
-### 离线与恢复
-
-`plan --offline` 不查询队列，显示的计划不是集群就绪证明；一般 `plan`、`status`、`monitor`
-可能调用调度器。`--yes` 是跳过确认并允许写入/提交，不是预览；只有带 `--dry-run` 的对应
-提交命令才是不提交路径，也不等于真实资源验收。
-
-已存在 `vaspsolkit.json` 或 `vaspsolkit.state.json` 时应使用 status/menu 和配置命令续跑，
-不要删除状态以绕过 init 保护。Case 状态和用户级 submission receipt 都参与恢复；活动状态
-默认在 `${XDG_STATE_HOME:-~/.local/state}/vaspsolkit/cases`，可通过 `VASPSOLKIT_STATE_ROOT`
-设置。迁移到新账户或新路径不是经过验证的自动恢复方案，须先核对真实 Job ID 和未决回执，
-不能仅复制配置后直接重提。
-
-调度器完成与 VASP 收敛是独立判定。本轮假任务不生成有效 OUTCAR/CHGCAR/LOCPOT，不能
-据此声称完整五点扫描或 E-U 科学工作流已在新服务器验收。科学边界见
-[计算约定](SCIENTIFIC_CONVENTIONS.md)，真实集群适配见[集群配置](CLUSTER_CONFIGURATION.md)。
-
-## 复现实测
-
-在当前源码根目录、具备开发依赖及上述构建工具的环境中执行：
+测试入口：[文档流程](../tests/test_documented_workflows.py)、[输入适配](../tests/test_input_portability.py)、
+[调度器适配](../tests/test_scheduler_portability.py)和[Case 路径检查](../tests/test_vaspsolkit_case_setup.py)。
+维护者在具备开发依赖的源码环境中可执行：
 
 ```bash
 python -m pytest -q tests/test_documented_workflows.py tests/test_documentation_examples.py
 python -m pytest -q tests/test_input_portability.py tests/test_scheduler_portability.py
 python -m pytest -q tests/test_kspacing_workflow.py tests/test_input_completion.py tests/test_quick_commands.py
-python -m pytest -q
 ```
 
-测试自行隔离状态目录，不需要全局设置 `VASPSOLKIT_STATE_ROOT`，也不需要任何集群命令。
-安装测试从当前工作树复制必要包文件到临时目录构建，排除源码路径注入后安装和运行，
-不使用只打包已提交 HEAD 的维护者发布脚本。
+测试自行隔离状态目录，不需要任何集群命令；安装测试从当前工作树复制包文件到临时目录构建，
+不使用只打包已提交 HEAD 的发布脚本。

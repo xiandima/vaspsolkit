@@ -31,6 +31,38 @@ def test_site_navigation_and_chapters_exist():
         assert "{include} USER_GUIDE.md" in (ROOT / "docs" / f"{page}.md").read_text(encoding="utf-8")
 
 
+def test_manual_navigation_uses_local_accessible_progressive_enhancement():
+    config = runpy.run_path(str(ROOT / "docs/conf.py"))
+    assert "_templates" in config["templates_path"]
+    assert "manual.js" in config["html_js_files"]
+    template = (ROOT / "docs/_templates/layout.html").read_text()
+    assert 'extends "!layout.html"' in template
+    assert 'href="#main-content"' in template
+    assert 'id="main-content"' in template
+    assert '<button' in template and 'aria-expanded="false"' in template
+    assert '<details class="manual-mobile-toc"' in template
+    assert 'aria-label="本页目录"' in template
+    assert '{{ toc }}' in template
+    script = (ROOT / "docs/_static/manual.js").read_text()
+    assert 'aria-current' in script
+    assert 'Escape' in script
+    assert 'fetch(' not in script
+    manifest = (ROOT / "MANIFEST.in").read_text()
+    assert '*.html' in manifest and '*.js' in manifest
+
+
+def test_built_manual_has_desktop_and_mobile_toc_when_requested():
+    build = os.environ.get("VASPSOLKIT_DOCS_BUILD")
+    if not build:
+        return
+    for name in ("quickstart", "inputs", "recovery", "results"):
+        html = (Path(build) / f"{name}.html").read_text()
+        assert 'class="manual-toc"' in html
+        assert 'class="manual-mobile-toc"' in html
+        assert 'id="main-content"' in html
+        assert 'class="manual-menu-toggle"' in html
+
+
 def test_site_records_the_source_commit(monkeypatch, tmp_path):
     from types import SimpleNamespace
     commit = "1234567890abcdef" * 2 + "12345678"
@@ -61,6 +93,8 @@ def test_docs_deployment_is_test_gated_and_main_only():
     assert "docs/requirements.txt" in workflow
     assert "sphinx" in workflow and "upload-pages-artifact" in workflow
     assert "python -m pytest -q" in workflow
+    assert "tools/check_manual_browser.py" in workflow
+    assert "playwright install --with-deps chromium" in workflow
     assert "needs: build" in workflow
     assert "github.ref == 'refs/heads/main'" in workflow
     assert "github.event_name != 'pull_request'" in workflow
@@ -70,6 +104,7 @@ def test_docs_deployment_is_test_gated_and_main_only():
     assert 'paths:' not in workflow
     manifest = (ROOT / "MANIFEST.in").read_text(encoding="utf-8")
     assert "*.css" in manifest and "*.png" in manifest and "*.csv" in manifest
+    assert "tools/check_manual_browser.py" in manifest
 
 
 class Links(HTMLParser):

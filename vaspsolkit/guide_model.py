@@ -51,6 +51,15 @@ def build_snapshot(workdir: Path, config_path: Optional[Path] = None) -> GuideSn
 
 def recommend_action(snapshot: GuideSnapshot) -> GuideAction:
     case = snapshot.case
+    for diagnostic in case.diagnostics:
+        if diagnostic.code in {"invalid-case", "invalid-config", "invalid-state"}:
+            return GuideAction(
+                name="review-case",
+                title_zh="检查 Case 路径、配置与状态",
+                reason_zh=f"{diagnostic.summary}: {diagnostic.detail}\n{diagnostic.suggestion}",
+                cli_command="next",
+                enables_zh="修正后重新判断下一步",
+            )
     if snapshot.missing_base_inputs:
         return GuideAction(
             name="fix-inputs",
@@ -118,6 +127,14 @@ def recommend_action(snapshot: GuideSnapshot) -> GuideAction:
             effect=action_effect("monitor"),
             cli_command="monitor",
             enables_zh="确认是否可以检查中性收敛",
+        )
+    if case.neutral_status in {"FAILED", "NEEDS_REVIEW", "BLOCKED"}:
+        return GuideAction(
+            name="check-neutral",
+            title_zh="检查中性计算输出与诊断",
+            reason_zh="中性任务需要审查；先核对输出和收敛，不直接重提。",
+            cli_command="check-neutral",
+            enables_zh="定位中性计算问题",
         )
     if case.neutral_status == "CONVERGED" and case.charge_total == 0:
         return GuideAction(
@@ -200,6 +217,8 @@ def action_cli_argv(
     if action.cli_command is None:
         raise ValueError(f"action has no CLI command: {action.name}")
     argv = [action.cli_command, "--workdir", str(Path(workdir).resolve())]
+    if action.name == "review-case":
+        argv.append("--dry-run")
     if config_path is not None:
         argv.extend(["--config", str(Path(config_path).resolve())])
     if action.cli_command in {"prepare-neutral", "submit-neutral", "submit-selected", "reset-queued"}:

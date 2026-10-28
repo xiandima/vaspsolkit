@@ -5,9 +5,10 @@ include CITATION.cff
 include CONTRIBUTING.md
 include pyproject.toml
 include tools/build_release.py
+include tools/check_manual_browser.py
 include .github/workflows/tests.yml
 recursive-include docs *.md
-recursive-include docs *.py *.txt *.css *.png *.csv
+recursive-include docs *.py *.txt *.css *.js *.html *.png *.csv
 include .github/workflows/docs.yml
 recursive-include templates *.sh
 recursive-include examples *.json *.md

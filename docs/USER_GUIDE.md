@@ -1,8 +1,9 @@
-# 使用手册
+# 使用手册（合订查询版）
 
 [手册首页](index.md) · [安装与升级](INSTALLATION.md) · [服务器适配](CLUSTER_CONFIGURATION.md)
 
-第一次使用建议先走 README 的菜单流程。本页供需要不同输入方式、直接命令或故障处理时查阅。
+第一次使用请按[第一次计算](quickstart.md)操作。本页汇集输入、直接命令、反应分析和恢复说明，
+与各专题页共用正文，供集中查询，不是另一套入门路线。
 以下命令均在独立 Case 目录执行；也可用 `--workdir "/path/to/my case"` 指定目录。
 命令中的示例路径、资源和物理参数应换成自己的值。
 
@@ -24,6 +25,9 @@ vaspsolkit menu --workdir "/path/to/my case"
 
 POSCAR 需有 VASP5 格式的元素名称行，POTCAR 顺序必须与之相同。请使用 Case 内的普通文件；
 不要依赖指向 Case 外的符号链接。补全操作只生成缺失文件，不替换已有文件。
+
+**完成信号：** 菜单 `10` 显示基础输入检查通过。新 Case 继续[初始化](inputs.md#初始化时确认什么)，
+已有 Case 选 `03` 查看当前阶段。若检查报错，先修正指出的输入，不重复初始化。
 
 ### 只有结构、模板和脚本
 
@@ -53,6 +57,9 @@ INCAR 已在 Case 内时省略 `--incar-template`。依次确认：
 
 生成记录在 `vaspsolkit.inputs-<id>.json`，不含 POTCAR 正文。输入生成和初始化是两个确认步骤：
 生成已成功后取消初始化，不会删除已经生成的输入。
+
+**下一步：** 核对生成文件和记录，选 `10` 检查后再初始化。若提示保存设置失败，先检查
+输入是否已经生成；保存失败不等于输入生成失败，不要删除已有输入重做。
 
 ### KSPACING 或显式网格
 
@@ -92,7 +99,12 @@ vaspsolkit inputs --backend native --mesh 3 3 1 --centering gamma
 工具输出校验不通过时不会导入；查看报错中的元素、变体或采样问题后重试。
 已存在文件不会因切换后端被重新生成。
 
+**完成信号：** 缺失输入已经导入，基础输入检查通过。仍报元素或采样错误时，保留报错，
+核对库路径与元素映射；不要通过改文件名或放宽检查掩盖不匹配。
+
 ## 初始化时确认什么
+
+仅对没有配置和任务状态的新 Case 执行：
 
 ```bash
 vaspsolkit init
@@ -112,6 +124,12 @@ ENCUT 建议取自 POTCAR 的 ENMAX，不代替收敛测试。保留已有 INCAR
 自动写入 ENCUT。中性和带电准备还会应用相应阶段设置，不能仅检查初始化时的模板。
 默认菜单流程是结构优化加五点扫描；不能把任意静态或其他溶剂模板直接当作等价流程。
 
+**完成信号：** `vaspsolkit.json` 和 `vaspsolkit.state.json` 已生成，此时不提交任务。
+下一步是准备中性计算。若已有配置或状态，请继续原 Case，不删除记录重新初始化。
+
+要组合多个体系时，在首次 collect 前填写[方法记录](reaction.md#先记录方法)。
+`workflow.method_fingerprint` 是人工方法编号，不是程序自动验证的输入指纹。
+
 SHE 参考值与来源应匹配实际方法。修改已保存的参考值使用：
 
 ```bash
@@ -124,10 +142,12 @@ vaspsolkit configure-reference
 
 以下各段对应不同阶段，**不要把所有命令连起来执行**。提交后等待任务结束并检查通过，
 再进入下一段。`next` 只执行一个推荐动作，`run` 也不是全流程后台控制器。
+从中途继续时，只执行当前阶段；每段中的 `CASE` 都应改成同一个真实计算目录。
+命令中的 `--yes` 授权写入或提交，`--dry-run` 才是对应提交命令的预览。
 
 ### 新 Case：初始化和预览
 
-交互初始化可参考上一节。无交互终端时必须明确填写参数：
+交互初始化见[初始化时确认什么](inputs.md#初始化时确认什么)。无交互终端时必须明确填写参数：
 
 ```bash
 CASE="/path/to/my case"
@@ -147,6 +167,9 @@ vaspsolkit submit-neutral --workdir "$CASE" --dry-run
 但 dry-run 不能验证账户、分区、模块、MPI 或 VASP 是否可用。
 已有配置或状态的 Case 请跳过初始化，不能覆盖记录后重来。
 
+**完成信号：** 中性任务记录为 PREPARED，提交预览显示 `neutral: DRY-RUN`，没有真实 Job ID。
+核对准备后的 INCAR 与预览资源，再进入中性提交；预览失败时按提示修正输入或脚本，不直接提交。
+
 无交互补全也可明确写出全部参数。下面假设模板已有 KSPACING：
 
 ```bash
@@ -161,10 +184,18 @@ vaspsolkit inputs --workdir "$CASE" --incar-template "/path/to/INCAR.template" \
 ### 中性提交与检查
 
 首次真实提交前，先确认[本机资源](CLUSTER_CONFIGURATION.md)。下面的提交使用已保存的配置：
+已有中性 Job ID 时，不再执行下面的 submit-neutral；直接使用本节后面的查询与检查命令。
+从中途进入本节时，先将 `CASE` 设为原计算目录。
 
 ```bash
+CASE="/path/to/my case"
 vaspsolkit plan --workdir "$CASE"
 vaspsolkit submit-neutral --workdir "$CASE"
+```
+
+**提交完成信号：** 返回 Job ID。等待作业结束后，再检查：
+
+```bash
 vaspsolkit monitor --workdir "$CASE"
 vaspsolkit check-neutral --workdir "$CASE"
 ```
@@ -175,12 +206,26 @@ vaspsolkit check-neutral --workdir "$CASE"
 进入五点前，中性计算须通过检查，并有可用的 OUTCAR、CONTCAR、CHGCAR、LOCPOT。
 队列显示 COMPLETED 并不等于 VASP 已收敛。
 
+**继续条件：** 输出中性状态 `CONVERGED` 后进入五点准备。QUEUED / RUNNING 继续等待；
+NEEDS_REVIEW / FAILED 停止推进并检查输出；UNKNOWN 先查原 Job ID，不重提。
+具体处理见[检查与恢复](recovery.md)。
+
 ### 五点准备与提交
 
+仅在中性状态为 CONVERGED、且尚未生成扫描点时准备。已有扫描目录请先查看状态，
+不要为了补交一批任务重新 prepare-charge。
+
 ```bash
+CASE="/path/to/my case"
 vaspsolkit prepare-charge --workdir "$CASE"
 vaspsolkit check-prepared --workdir "$CASE"
 vaspsolkit submit-selected --workdir "$CASE" 1 2 3 4 5 --dry-run
+```
+
+**准备完成信号：** 默认生成 `charge_sweep/1` 至 `charge_sweep/5`，输入检查通过。
+核对每点 INCAR 和提交预览后，另行确认真实提交：
+
+```bash
 vaspsolkit submit-selected --workdir "$CASE" 1 2 3 4 5
 ```
 
@@ -190,19 +235,30 @@ vaspsolkit submit-selected --workdir "$CASE" 1 2 3 4 5
 `max_inflight` 限制当前 Case 的在途数，不是全用户配额；一次提交后不会自动补交下一批。
 超出上限的所选任务保留为 PREPARED，需要再次选择提交。目录名或扫描设置改过时，以实际任务列表为准。
 
+**提交完成信号：** 已接受的点各有 Job ID；后续只选择仍为 PREPARED 的点补交，不反复选择全部点。
+检查不通过先修正对应输入；任务失败或 UNKNOWN 按[恢复章节](recovery.md)处理。
+
 ### 收敛、收集和拟合
 
 等待各点完成后执行：
 
 ```bash
+CASE="/path/to/my case"
 vaspsolkit status --workdir "$CASE"
 vaspsolkit check --workdir "$CASE"
+```
+
+**继续条件：** 五个点均为 CONVERGED，且原始输出可接受。然后收集与审计：
+
+```bash
 vaspsolkit collect --workdir "$CASE"
 vaspsolkit audit --workdir "$CASE"
 ```
 
-先看 `results/quality_report.csv`、`points_to_rerun.csv` 和各点输出。
-所有点可接受后再运行：
+`02` 不会自动执行 `61`；使用推荐流程也须主动审计。
+先看 `results/quality_report.csv` 的 `warnings` 列、`points_to_rerun.csv` 和各点输出。
+`wrote ...` 只表示报告已写出，不表示没有警告；[核对警告与人工验收项](results.md#先读质量报告)，
+确认所有点可接受后再运行：
 
 ```bash
 vaspsolkit postprocess --summary "$CASE/results/summary.csv" --output "$CASE/results/eu"
@@ -217,9 +273,38 @@ postprocess 只读取汇总 CSV，不重新检查 OUTCAR。默认要求五点全
 `--allow-excluded` 只供明确排除后的诊断，报告和图显示排除信息，不满足五点验收；
 低层 `analyze` 不提供相同保护，不要用它绕过检查。
 
+**完成信号：** 输出目录包含 `analysis.json`、`eu_curve.png`、`eu_curve.csv` 和 `report.md`。
+接着做[结果验收](results.md#怎么判断结果是否可用)；生成图不代表科学结论已验证。
+
 ## 反应分析
 
-先分别完成各个体系的五点分析，然后复制并修改
+### 先记录方法
+
+计划比较多个体系时，**在首次 collect 和拟合之前**核对各体系的实际方法，
+并在各 Case 的 `vaspsolkit.json` 中填写 `workflow.method_fingerprint`，引用自己保存的方法记录编号。
+例如只在已有 `workflow` 对象中补充下面的字段，不要用片段替换整个配置文件：
+
+```json
+{
+  "workflow": {
+    "method_fingerprint": "method-record-001"
+  }
+}
+```
+
+示例编号应换成你的真实记录编号。编辑配置时不要同时运行其他写入 Case 的操作。
+该字段是人工声明，不是程序自动验证的哈希；相同编号不能证明实际参数相同。
+按[方法记录清单](SCIENTIFIC_CONVENTIONS.md#she-与方法记录)核对 VASP/VASPsol 版本、数值设置、
+溶剂、能量与电势约定。只有实际可比较的方法才使用同一编号，不为了通过检查把不同方法写成相同值。
+
+**已有分析结果但缺编号：** 若实际方法已核对一致、只是漏填记录，补齐后重新 collect、audit、postprocess，
+更新各体系的 `analysis.json`；仅补元数据不要求重跑 VASP。若实际方法不一致，须先解决计算可比性，
+不能靠补编号修复。
+
+### 准备各体系与反应配置
+
+分别完成[五点收集与拟合](workflow.md#收敛收集和拟合)，检查每个 `analysis.json` 的
+`provenance.method_fingerprint` 已记录正确编号，再复制并修改
 [reaction-spec.example.json](../examples/reaction-spec.example.json)。
 
 1. `systems` 指向各体系的 `analysis.json`；相对路径以 reaction.json 所在目录为准。
@@ -227,42 +312,50 @@ postprocess 只读取汇总 CSV，不重新检查 OUTCAR。默认要求五点全
 3. 在 `curves` 中为每条曲线填写 `name` 和 `formula`，例如 `E("*N2O2", U) - E("*NO", U) - G_NO`。
 4. `grid` 选择所有体系共同采样范围内的电势区间。
 
+默认要求各体系的方法标识、SHE、能量/电势约定等一致，并检查共同拟合范围。
+程序不替你验证气相常数、反应计量或自由能修正。使用 `E("体系名", U)`，
+在 E 外组合常数和系数，不在 E 内平移或缩放 U。
+
+### 运行并检查输出
+
 ```bash
 vaspsolkit reaction --spec "/path/to/reaction.json" --output "/path/to/reaction-results"
 ```
 
-输出 `reaction_curves.csv`、`reaction_curves.png` 和 `reaction_report.md`。
-
-在收集和拟合之前，应核对方法，并在各 Case 的 `vaspsolkit.json` 中填写
-`workflow.method_fingerprint`，例如引用自己保存的方法记录编号。该字段是人工声明，
-不是程序替你验证的哈希。默认检查各体系的该标识、SHE、能量/电势约定等一致性。
+**完成信号：** 输出目录生成 `reaction_curves.csv`、`reaction_curves.png` 和 `reaction_report.md`。
+打开报告核对实际路径、公式、常数、来源与范围，不能仅凭图像判断反应式或单位正确。
 
 默认不接受未知来源或越过共同拟合范围。旧数据需要重建方法记录并重新分析；
 不要为了画出图就开启豁免。确需诊断性放行时，开关及影响见
 [反应层边界](SCIENTIFIC_CONVENTIONS.md#反应层边界)。
 
-使用 `E("体系名", U)` 后在外部加减常数和系数，不在 E 内平移或缩放 U，以免超出实际取样范围。
 常数命名为 G_NO 不会自动添加 ZPE 或熵；只有明确加入这些修正，才能称为相应的自由能曲线。
 
 ## 遇到问题
 
-| 现象 | 先做什么 |
-| --- | --- |
-| 菜单显示缺 POSCAR | 提供实际结构；INCAR 模板不能代替结构 |
-| 缺 POTCAR 或元素顺序不符 | 用 `inputs` 补齐缺项；已有错误文件先人工核对，不会自动覆盖 |
-| 已有 INCAR 与模板不一致 | 决定采用哪份输入；确认保留现有文件时省略模板参数 |
-| KSPACING 已设置，仍提示 KPOINTS 有错 | 检查是否已有 KPOINTS；存在时优先使用它，不自动回退 |
-| 新服务器没有 compute 分区 | 在提交资源选择中换成本机分区，再选择自动或具体节点 |
-| 出现旧 PBS 文案 | 先检查是否导入了旧源码；见[安装排查](INSTALLATION.md#命令或版本不对) |
-| UNKNOWN 或 squeue/sacct 查询失败 | 用集群工具核对原 Job ID；恢复查询前不重提 |
-| FAILED / NEEDS_REVIEW | 查看 `03` / `50` 和输出，定位错误后再选择修复 |
-| 拟合被五点检查拒绝 | 看质量报告和每个点的收敛/纳入状态，修复数据，不删除中性点凑曲线 |
-| reaction 报来源或范围不匹配 | 核对各体系的方法记录和共同电势范围，重新收集/分析 |
-| 当前没有交互终端 | 使用带完整参数的直接命令，先执行子命令 `--help` |
+先选 `03` 查看任务状态、Job ID 和诊断。中性输出在 Case 根目录，默认扫描输出在
+`charge_sweep/1` 至 `charge_sweep/5`；改过目录配置时以实际路径为准。
+
+| 现象 | 先做什么 | 何时继续 |
+| --- | --- | --- |
+| 缺 POSCAR、POTCAR 或采样 | 按[输入准备](inputs.md)补缺项；已有错误文件先人工核对 | 基础输入检查通过后初始化或继续原阶段 |
+| INCAR 与模板不一致 | 决定采用哪份输入；保留现有文件时省略模板参数 | 参数冲突解决后再确认 |
+| KSPACING 已设置，仍报 KPOINTS 有错 | 检查现有 KPOINTS，它优先于 KSPACING，不自动回退 | 无活动任务时修正采样，再检查输入 |
+| 新服务器没有 compute 分区 | 在提交资源选择中换成本机分区 | 资源与最终脚本核对无误后提交 |
+| 出现旧 PBS 文案 | 按[安装排查](INSTALLATION.md#命令或版本不对)核对导入位置 | 确认使用正确安装后继续原 Case |
+| UNKNOWN 或队列查询失败 | 用 squeue/sacct 核对原 Job ID | 查明原作业状态前不重提、不删记录 |
+| 中性 FAILED / NEEDS_REVIEW | 运行 check-neutral，检查根目录输出 | 查明原因并制定恢复方案，不套用扫描点 repair |
+| 扫描点 FAILED / NEEDS_REVIEW / BLOCKED | 查看 `03` / `50` 和该点输出 | 按[修复失败点](recovery.md#修复失败点)处理后重新检查 |
+| 五点中仍有 PREPARED | 检查 max_inflight 和在途任务数 | 容量允许后只选择剩余就绪点提交 |
+| 审计写出文件但有 warnings | 对照[警告说明](results.md#先读质量报告)核对原始输出 | 异常已解决或科学上已说明，再拟合 |
+| 拟合拒绝五点数据 | 检查点数、中性点、收敛和纳入状态 | 修复数据后重新收集，不删中性点凑曲线 |
+| reaction 报来源或范围不匹配 | 核对[方法记录](reaction.md#先记录方法)和共同电势范围 | 更新分析结果或缩小到实际共同区间后重试 |
+| 当前没有交互终端 | 使用完整参数的直接命令，先看子命令 --help | 缺参补齐后执行，不用答案管道模拟菜单 |
 
 需要详细错误信息时：
 
 ```bash
+CASE="/path/to/my case"
 vaspsolkit --debug status --workdir "$CASE"
 ```
 
@@ -287,6 +380,9 @@ vaspsolkit repair --workdir "$CASE" --job 3 --no-submit
 它展示修复建议并询问，拒绝才是仅预览；确认后会改文件。`--no-submit` 只表示不提交，
 不表示不修改。省略它可能提交不止一个就绪点，建议修复后另行检查、选择需要的点提交。
 默认恢复不自动开启 WAVECAR。
+
+**修复后：** 阅读归档与修改记录，重新检查该点输入，确认原作业不再活动后单独选择提交。
+新计算完成后重新 check、collect、audit、postprocess；修复命令结束不代表该点已经收敛。
 
 中性任务失败时先查看 `check-neutral` 的诊断；当前扫描点 repair 入口不能当作中性任务的通用恢复器。
 不要删除状态来强行回到第一步，应保留原输出和 Job ID，核对队列后再制定恢复方案。

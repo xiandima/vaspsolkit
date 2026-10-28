@@ -298,10 +298,10 @@ def check_neutral_job(
         scheduler_state=scheduler_state,
         required_outputs=NEUTRAL_REQUIRED_OUTPUTS,
     )
-    neutral.status = diagnostic.status
+    neutral.status = "UNKNOWN" if scheduler_state.upper() == "UNKNOWN" else diagnostic.status
     neutral.diagnostics = diagnostic.diagnostics
     state.neutral = neutral
-    if diagnostic.status == "CONVERGED":
+    if neutral.status == "CONVERGED":
         neutral.metadata.update(
             {
                 "optimized_contcar_sha256": _sha256(base / "CONTCAR"),
@@ -310,7 +310,7 @@ def check_neutral_job(
             }
         )
         state.stage = "neutral_converged"
-    elif diagnostic.status in {"QUEUED", "RUNNING", "SUBMITTED", "UNKNOWN"}:
+    elif neutral.status in {"QUEUED", "RUNNING", "SUBMITTED", "UNKNOWN"}:
         state.stage = "neutral_submitted"
     else:
         state.stage = "neutral_needs_review"
@@ -325,20 +325,16 @@ def refresh_neutral_scheduler_state(
     scheduler=None,
     state_path: Optional[Path] = None,
 ) -> WorkflowState:
-    """Refresh only the neutral scheduler state; do not claim VASP convergence."""
+    """Refresh the neutral queue state and check outputs after it leaves the queue."""
     if state.neutral is None or not state.neutral.job_id:
         return state
     scheduler = scheduler or scheduler_from_config(config.scheduler)
-    scheduler_state = scheduler.status(state.neutral.job_id).state.upper()
-    if scheduler_state in {"Q", "QUEUED", "PENDING"}:
-        state.neutral.status = "QUEUED"
-    elif scheduler_state in {"R", "RUNNING", "CONFIGURING", "COMPLETING"}:
-        state.neutral.status = "RUNNING"
-    elif scheduler_state == "UNKNOWN":
+    queue_state = scheduler.status(state.neutral.job_id)
+    if queue_state.state.upper() == "UNKNOWN":
         state.neutral.status = "UNKNOWN"
     else:
-        state.neutral.status = "SUBMITTED"
-    state.stage = "neutral_submitted"
+        _apply_recorded_scheduler_state(Path(base).resolve(), state.neutral, queue_state)
+    _update_refreshed_stage(state)
     state.save(_state_path(base, state_path))
     return state
 
@@ -990,7 +986,7 @@ def refresh_state(
             continue
         queue_state = scheduler.status(record.job_id)
         _reconcile_charge_record(base, record, queue_state)
-    _update_charge_stage(state)
+    _update_refreshed_stage(state)
     state.save(Path(state_path) if state_path else base / STATE_FILENAME)
     return state
 

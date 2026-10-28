@@ -1,0 +1,46 @@
+{% extends "!layout.html" %}
+
+{% block extrabody %}
+<a class="manual-skip" href="#main-content">跳到正文</a>
+{% endblock %}
+
+{% block sidebartitle %}
+<a class="manual-brand" href="{{ pathto(root_doc) }}">VASPsolKit</a>
+<div class="manual-edition">用户手册 <span>{{ version }}</span></div>
+{% include "searchbox.html" %}
+{% endblock %}
+
+{% block mobile_nav %}
+<button class="manual-menu-toggle" type="button" data-toggle="wy-nav-top"
+        aria-label="打开章节导航" aria-expanded="false">
+  <span class="fa fa-bars" aria-hidden="true"></span>
+</button>
+<a href="{{ pathto(root_doc) }}">VASPsolKit 用户手册</a>
+{% endblock %}
+
+{% block content %}
+<div class="manual-layout">
+  <div class="manual-main" id="main-content" tabindex="-1">
+    {{ super() }}
+  </div>
+  {% if display_toc %}
+  <aside class="manual-toc">
+    <nav aria-label="本页目录">
+      <p class="manual-toc-title">本页目录</p>
+      {{ toc }}
+    </nav>
+    <a class="manual-source" href="https://github.com/xiandima/vaspsolkit/issues">反馈文档问题 <span class="fa fa-external-link" aria-hidden="true"></span></a>
+  </aside>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block document %}
+{% if display_toc %}
+<details class="manual-mobile-toc">
+  <summary>本页目录</summary>
+  <nav aria-label="本页目录">{{ toc }}</nav>
+</details>
+{% endif %}
+{{ super() }}
+{% endblock %}

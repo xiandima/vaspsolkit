@@ -6,8 +6,22 @@
 - 版本追溯：网站 `versions.html` 和 `version.json` 记录构建时的 `GITHUB_SHA`。
 
 每次 main 更新都会安装依赖、运行完整单元测试、严格构建 Sphinx、检查生成站点的本地
-链接和中文搜索索引，再上传 Pages artifact。只有 main 的非 PR 构建允许部署，部署权限
+链接和中文搜索索引，并以 Chromium 检查桌面与移动导航、复制、搜索和布局，再上传 Pages artifact。只有 main 的非 PR 构建允许部署，部署权限
 限制在 deploy job；PR 仅生成预览。预览构建方法见项目 CONTRIBUTING.md。
+
+浏览器检查独立于计算运行依赖。维护者可在文档 Python 环境中复现：
+
+```bash
+python -m pip install -r docs/browser-requirements.txt
+python -m playwright install chromium
+python -m sphinx -n -W -b html docs build/docs
+python tools/check_manual_browser.py --build build/docs --output build/browser-qa
+```
+
+检查覆盖 1440、1024、390、360 像素宽度、键盘菜单与 Escape、页内目录、中文/英文搜索、
+命令复制、示例图和 file 页面搜索。报告与截图保存在指定输出目录；HTTP 服务只绑定
+本机回环地址，检查结束即关闭。CI 将截图作为独立 artifact 保存，不发布到手册中。
+
 不要将计算目录、POTCAR、VASP 输出或凭据放入文档。发布后核对 Pages workflow 成功，
 并检查网站 version.json 中的提交与仓库 main 一致。
 

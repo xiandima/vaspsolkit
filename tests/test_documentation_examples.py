@@ -10,13 +10,7 @@ from vaspsolkit.cli import _build_parser
 ROOT = Path(__file__).resolve().parents[1]
 GUIDES = (
     ROOT / "README.md",
-    ROOT / "docs/USER_GUIDE.md",
-    ROOT / "docs/INSTALLATION.md",
-    ROOT / "docs/CLUSTER_CONFIGURATION.md",
-    ROOT / "docs/index.md",
-    ROOT / "docs/quickstart.md",
-    ROOT / "docs/commands.md",
-    ROOT / "docs/results.md",
+    *sorted(ROOT.joinpath("docs").glob("*.md")),
 )
 
 
@@ -75,3 +69,50 @@ def test_readme_links_to_advanced_guides_without_requiring_developer_setup():
     assert "[dev]" not in readme
     assert "pytest" not in readme
     assert "tools/build_release.py" not in readme
+
+
+def test_quickstart_status_example_matches_cli_output():
+    from vaspsolkit.cli import _print_neutral_state
+    from vaspsolkit.state import JobRecord, WorkflowState
+
+    output = []
+    state = WorkflowState(neutral=JobRecord(folder=".", status="CONVERGED", job_id="12345"))
+    _print_neutral_state(state, output.append)
+    quickstart = (ROOT / "docs/quickstart.md").read_text(encoding="utf-8")
+    assert output[0].strip() in quickstart
+
+
+def test_quickstart_menu_excerpt_matches_live_catalogue():
+    from vaspsolkit.menu_actions import action_by_code
+
+    quickstart = (ROOT / "docs/quickstart.md").read_text(encoding="utf-8")
+    rows = re.findall(r"^(\d{2})  (.+)$", quickstart, re.MULTILINE)
+    assert {code for code, _ in rows} >= {"11", "20", "21", "22", "30", "31", "32"}
+    for code, title in rows:
+        assert action_by_code(code).title_zh == title
+
+
+def test_quickstart_explains_manual_audit_before_postprocess():
+    quickstart = (ROOT / "docs/quickstart.md").read_text(encoding="utf-8")
+    assert "`02` 不会自动执行 `61`" in quickstart
+    assert "warnings" in quickstart
+    assert "NEEDS_REVIEW" in quickstart
+    assert "charge_sweep/3" in quickstart
+
+
+def test_reaction_method_record_precedes_execution_example():
+    guide = (ROOT / "docs/USER_GUIDE.md").read_text(encoding="utf-8")
+    reaction = guide.split("## 反应分析\n", 1)[1].split("## 遇到问题\n", 1)[0]
+    assert reaction.index("workflow.method_fingerprint") < reaction.index("vaspsolkit reaction")
+
+
+@pytest.mark.parametrize("name", ["inputs", "workflow", "recovery", "reaction"])
+def test_shared_chapters_have_unambiguous_include_boundaries(name):
+    page = (ROOT / "docs" / f"{name}.md").read_text(encoding="utf-8")
+    guide = (ROOT / "docs/USER_GUIDE.md").read_text(encoding="utf-8")
+    start = re.search(r":start-after: '([^']+)'", page).group(1)
+    end = re.search(r":end-before: '([^']+)'", page).group(1)
+    assert guide.count(start) == guide.count(end) == 1
+    included = guide.split(start, 1)[1].split(end, 1)[0]
+    assert included.strip()
+    assert "上一节" not in included

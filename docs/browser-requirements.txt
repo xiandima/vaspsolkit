@@ -1,0 +1,2 @@
+# Optional browser QA, separate from runtime and documentation builds.
+playwright==1.64.1

@@ -843,9 +843,10 @@ def _submission_resources(config: KitConfig, args) -> ResourceRequest:
         nodes = ()
     return ResourceRequest.create(
         allocation=allocation, partition=args.resource_partition or current.partition,
-        nodes=nodes, node_count=args.resource_node_count or current.node_count,
-        tasks=args.resource_tasks or current.tasks,
-        tasks_per_node=args.resource_tasks_per_node or current.tasks_per_node,
+        nodes=nodes,
+        node_count=current.node_count if args.resource_node_count is None else args.resource_node_count,
+        tasks=current.tasks if args.resource_tasks is None else args.resource_tasks,
+        tasks_per_node=current.tasks_per_node if args.resource_tasks_per_node is None else args.resource_tasks_per_node,
         walltime=current.walltime,
         script=current.script,
         persist=args.save_resources,
@@ -1007,17 +1008,21 @@ def _cmd_next(args, input_fn: InputFn, output: OutputFn) -> int:
 
     workdir = Path(args.workdir).expanduser().resolve()
     config_path = Path(args.config).expanduser().resolve() if args.config else None
-    if not args.dry_run:
+    snapshot = build_snapshot(workdir, config_path=config_path)
+    if not args.dry_run and recommend_action(snapshot).name != "review-case":
         if input_fn is input and not sys.stdin.isatty():
             raise ValueError("next needs an interactive terminal; use next --dry-run and the displayed explicit command for batch execution")
         sync = synchronize_case(workdir, config_path=config_path)
         if not sync.ok:
             output(f"队列查询失败：{sync.warning}；未执行后续操作。")
             return 1
-    snapshot = build_snapshot(workdir, config_path=config_path)
+        snapshot = build_snapshot(workdir, config_path=config_path)
     action = recommend_action(snapshot)
     output(f"推荐下一步：{action.title_zh}")
     output(action.reason_zh)
+    if action.name == "review-case":
+        output("请先修正上述问题；未查询队列、修改文件或执行后续动作。")
+        return 2
     if action.cli_command:
         if action.cli_command == "postprocess":
             results = workdir / snapshot.case.config.workflow.results_root
@@ -1152,7 +1157,9 @@ def _print_plan(config: KitConfig, preview, output: OutputFn) -> None:
 def _print_state(state: WorkflowState, output: OutputFn) -> None:
     output(f"stage={state.stage}")
     if state.neutral is not None:
-        output(f"  neutral: {state.neutral.status} job={state.neutral.job_id or '-'}")
+        diagnostics = ";".join(state.neutral.diagnostics)
+        detail = f" {diagnostics}" if diagnostics else ""
+        output(f"  neutral: {state.neutral.status} job={state.neutral.job_id or '-'}{detail}")
     for name, record in state.jobs.items():
         diagnostics = ";".join(record.diagnostics)
         output(f"  {name}: {record.status} job={record.job_id or '-'} restart={record.restart_count} {diagnostics}")

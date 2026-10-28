@@ -81,7 +81,7 @@ def test_public_tree_has_no_private_paths_or_site_hostnames() -> None:
     )
     site_node = re.compile(r"node\d+\.hpc\.local", re.IGNORECASE)
     text_suffixes = {
-        ".cff", ".css", ".json", ".md", ".py", ".sh", ".svg", ".toml", ".txt", ".yml", ".yaml"
+        ".cff", ".css", ".html", ".js", ".json", ".md", ".py", ".sh", ".svg", ".toml", ".txt", ".yml", ".yaml"
     }
     violations = []
     for path in Path(".").rglob("*"):

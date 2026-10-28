@@ -27,6 +27,15 @@ jobs:
       - run: python -m pytest --noconftest -q tests/test_docs_site.py
         env:
           VASPSOLKIT_DOCS_BUILD: build/docs
+      - run: python -m pip install -r docs/browser-requirements.txt
+      - run: python -m playwright install --with-deps chromium
+      - run: python tools/check_manual_browser.py --build build/docs --output build/browser-qa
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vaspsolkit-manual-browser-qa
+          path: build/browser-qa/
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         with:
           name: vaspsolkit-user-manual

@@ -42,7 +42,9 @@ html_theme_options = {
     "titles_only": False,
 }
 html_static_path = ["_static"]
+templates_path = ["_templates"]
 html_css_files = ["manual.css"]
+html_js_files = ["manual.js"]
 html_show_sourcelink = False
 html_show_sphinx = False
 # Keep file:// search self-contained; browser security blocks fetched snippets.

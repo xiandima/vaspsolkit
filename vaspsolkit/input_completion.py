@@ -83,7 +83,13 @@ def _settings_path(args):
 
 def _load_settings(path):
     before = path.read_bytes() if path.exists() else None
-    data = json.loads(before) if before is not None else {}
+    try:
+        data = json.loads(before) if before is not None else {}
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"invalid input settings JSON: {path.resolve()}: {exc}; "
+            "correct this file or use --settings PATH to select another settings file"
+        ) from exc
     if not isinstance(data, dict) or data.get("schema_version", 1) != 1:
         raise ValueError(f"unsupported input settings: {path}")
     mapping = data.get("potentials", {})

@@ -2,6 +2,11 @@
 
 ## 0.4.0 - Unreleased
 
+- Refine the manual around user tasks, expected outputs and recovery steps; shorten the README and bring reaction-method prerequisites forward.
+- Add desktop page-local navigation, a collapsible mobile contents list, keyboard-accessible navigation and a calmer reading layout without changing the documentation framework.
+- Gate documentation deployment on Chromium checks for search, command copying, page anchors, keyboard controls and four desktop/mobile viewport widths; retain screenshots for review.
+- Keep terminal neutral-job states and their diagnostics when refreshing; direct failed neutral calculations to output review instead of an endless queue refresh.
+- Reject explicit zero resource values instead of replacing them with defaults, stop next-step guidance on broken Case records, and identify malformed input-settings files in errors.
 - Add a Chinese Sphinx/MyST user manual with chapter navigation, search, code copying, mobile layout and a clearly labelled synthetic five-point E-U example. Test and deploy the manual from the same main commit as the program; publish source revision metadata.
 - Verify installed-wheel imports outside the source tree and exercise the documented offline setup and five-point postprocessing journey from the installed CLI.
 - Reject path-like POSCAR element labels before input staging, preserve relative-PATH VASPKIT launchers, and recognize fractional-hydrogen POTCAR variants.
