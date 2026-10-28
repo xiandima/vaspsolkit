@@ -333,7 +333,8 @@ vaspsolkit reaction --spec "/path/to/reaction.json" --output "/path/to/reaction-
 
 ## 遇到问题
 
-先选 `03` 查看任务状态、Job ID 和诊断。中性输出在 Case 根目录，默认扫描输出在
+先选 `03` 查看概览；扫描点的 Job ID 和计算诊断，用 `50` 或 `vaspsolkit status` 刷新后查看。
+中性输出在 Case 根目录，默认扫描输出在
 `charge_sweep/1` 至 `charge_sweep/5`；改过目录配置时以实际路径为准。
 
 | 现象 | 先做什么 | 何时继续 |

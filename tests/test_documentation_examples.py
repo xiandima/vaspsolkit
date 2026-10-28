@@ -82,6 +82,14 @@ def test_quickstart_status_example_matches_cli_output():
     assert output[0].strip() in quickstart
 
 
+def test_recovery_distinguishes_overview_from_refreshed_job_diagnostics():
+    guide = (ROOT / "docs/USER_GUIDE.md").read_text(encoding="utf-8")
+    recovery = guide.split("## 遇到问题\n", 1)[1].split("| 现象", 1)[0]
+    assert "`03` 查看概览" in recovery
+    assert "`50` 或 `vaspsolkit status`" in recovery
+    assert "Job ID" in recovery
+
+
 def test_quickstart_menu_excerpt_matches_live_catalogue():
     from vaspsolkit.menu_actions import action_by_code
 
